@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2025-present Matt Craig <mattwcraig@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: BSD-3-Clause
 
 try:
-    from .version import version as __version__
+    from ._version import version as __version__
 except ImportError:
     __version__ = ""
 
