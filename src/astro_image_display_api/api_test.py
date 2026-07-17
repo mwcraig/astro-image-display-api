@@ -337,7 +337,9 @@ class ImageAPITest:
 
         assert "fov" in vport
         assert "image_label" in vport
-        assert vport["image_label"] is None
+        # A label was generated for the unlabeled load, and get_viewport
+        # reports that label.
+        assert vport["image_label"] == self.image.image_labels[0]
         if world:
             assert isinstance(vport["center"], SkyCoord)
             # fov should be a Quantity since WCS is present
@@ -362,7 +364,8 @@ class ImageAPITest:
         vport = self.image.get_viewport()
         assert vport["center"] == (10, 10)
         assert vport["fov"] == 100
-        assert vport["image_label"] is None
+        # The unlabeled load was assigned a generated label.
+        assert vport["image_label"] == self.image.image_labels[0]
 
     def test_set_get_viewport_single_label(self, data):
         # If there is only one image, the viewport should be able to be set
@@ -565,7 +568,7 @@ class ImageAPITest:
             catalog_label="test2", color="red", shape="circle", size=10
         )
 
-        with pytest.raises(ValueError, match="Multiple catalog styles"):
+        with pytest.raises(ValueError, match="Multiple catalog labels"):
             self.image.get_catalog_style()
 
     def test_set_get_catalog_style_preserves_extra_keywords(self, catalog):
@@ -660,7 +663,7 @@ class ImageAPITest:
         assert (t2["y"] == catalog["y"]).all()
 
         # get_catalog without a label should fail with multiple catalogs
-        with pytest.raises(ValueError, match="Multiple catalog styles defined."):
+        with pytest.raises(ValueError, match="Multiple catalog labels defined"):
             self.image.get_catalog()
 
         # if we remove one of the catalogs we should be able to get the
@@ -676,10 +679,51 @@ class ImageAPITest:
         assert (t2["x"] == catalog["x"]).all()
         assert (t2["y"] == catalog["y"]).all()
 
-        # Check that retrieving a marker set that doesn't exist returns
-        # an empty table with the right columns
-        tab = self.image.get_catalog(catalog_label="test1")
-        self._assert_empty_catalog_table(tab)
+        # Check that retrieving a catalog that doesn't exist raises an
+        # error rather than silently returning an empty result.
+        with pytest.raises(ValueError, match="(?i)catalog label.*not found"):
+            self.image.get_catalog(catalog_label="test1")
+
+    def test_unlabeled_catalog_loads_get_unique_labels(self, catalog):
+        # Regression test for #92: catalogs loaded without a label must get
+        # a generated unique label, so that no catalog is ever silently
+        # overwritten or unreachable.
+        self.image.load_catalog(catalog)
+        self.image.load_catalog(catalog)
+
+        labels = self.image.catalog_labels
+        assert len(labels) == 2
+        assert len(set(labels)) == 2
+
+        # Both catalogs must be reachable by their generated labels.
+        for label in labels:
+            retrieved = self.image.get_catalog(catalog_label=label)
+            assert len(retrieved) == len(catalog)
+
+        # An unlabeled load after a labeled one must not shadow anything.
+        self.image.load_catalog(catalog, catalog_label="labeled")
+        assert len(self.image.catalog_labels) == 3
+
+    def test_unknown_catalog_label_raises_and_does_not_pollute(self, catalog):
+        # Regression tests for #113 (unknown explicit catalog labels must
+        # raise instead of returning empty/default results) and #95 (failed
+        # lookups must not create phantom catalog entries).
+        self.image.load_catalog(catalog, catalog_label="real")
+
+        with pytest.raises(ValueError, match="(?i)catalog label.*not found"):
+            self.image.get_catalog(catalog_label="phantom")
+
+        with pytest.raises(ValueError, match="(?i)catalog label.*not found"):
+            self.image.get_catalog_style(catalog_label="phantom")
+
+        with pytest.raises(ValueError, match="(?i)catalog label.*not found"):
+            self.image.set_catalog_style(catalog_label="phantom", color="blue")
+
+        # None of the failed calls above may have created a catalog entry...
+        assert self.image.catalog_labels == ("real",)
+
+        # ...so label-free calls still resolve to the single real catalog.
+        assert self.image.get_catalog_style()["catalog_label"] == "real"
 
     def test_load_catalog_multiple_same_label(self, catalog):
         # Check that loading a catalog with the same label multiple times
@@ -780,6 +824,26 @@ class ImageAPITest:
         self.image.remove_catalog(catalog_label="*")
         self._assert_empty_catalog_table(self.image.get_catalog())
 
+    def test_remove_all_catalogs_restores_fresh_state(self, catalog):
+        # Regression test for #96: after remove_catalog("*") the viewer must
+        # behave exactly like a freshly created viewer.
+        self.image.load_catalog(catalog, catalog_label="test1")
+        self.image.set_catalog_style(
+            catalog_label="test1", color="blue", shape="square", size=10
+        )
+        self.image.load_catalog(catalog, catalog_label="test2")
+
+        self.image.remove_catalog(catalog_label="*")
+
+        fresh = self.image_widget_class()
+        assert self.image.catalog_labels == fresh.catalog_labels == ()
+
+        # The default style must be restored, including the required keys.
+        style = self.image.get_catalog_style()
+        assert style == fresh.get_catalog_style()
+        for key in ("color", "shape", "size"):
+            assert key in style
+
     def test_remove_catalog_does_not_accept_list(self):
         data = np.arange(10).reshape(5, 2)
         tab = Table(data=data, names=["x", "y"])
@@ -815,7 +879,8 @@ class ImageAPITest:
             result["coord"].dec.deg, mark_coord_table["coord"].dec.deg
         )
 
-    def test_stretch(self):
+    def test_stretch(self, data):
+        self.image.load_image(data, image_label="test")
         original_stretch = self.image.get_stretch()
 
         with pytest.raises(TypeError, match=r"Stretch.*not valid.*"):
@@ -964,6 +1029,57 @@ class ImageAPITest:
         self.image.load_image(data, image_label="test")
         assert len(self.image.image_labels) == 1
         assert self.image.image_labels[-1] == "test"
+
+    def test_unlabeled_image_loads_get_unique_labels(self, data):
+        # Regression test for #92: images loaded without a label must get a
+        # generated unique label, appear in image_labels, and stay reachable.
+        self.image.load_image(data)
+        self.image.load_image(data * 2)
+
+        labels = self.image.image_labels
+        assert len(labels) == 2
+        assert len(set(labels)) == 2
+
+        # Both images must be reachable by their generated labels.
+        for label in labels:
+            assert self.image.get_image(image_label=label) is not None
+
+        # A labeled load after an unlabeled one must not shadow the
+        # unlabeled image.
+        self.image.load_image(data, image_label="labeled")
+        assert len(self.image.image_labels) == 3
+        for label in labels:
+            assert self.image.get_image(image_label=label) is not None
+
+    def test_empty_viewer_image_operations_raise(self):
+        # Regression test for #94: operations that need an image must raise
+        # on a viewer with no image loaded instead of silently succeeding.
+        image_getters = [
+            "get_image",
+            "get_viewport",
+            "get_stretch",
+            "get_cuts",
+            "get_colormap",
+        ]
+        for getter in image_getters:
+            with pytest.raises(ValueError, match="[Nn]o image"):
+                getattr(self.image, getter)()
+
+        with pytest.raises(ValueError, match="[Nn]o image"):
+            self.image.set_colormap("viridis")
+
+        with pytest.raises(ValueError, match="[Nn]o image"):
+            self.image.set_stretch(LogStretch())
+
+        with pytest.raises(ValueError, match="[Nn]o image"):
+            self.image.set_cuts((10, 100))
+
+        with pytest.raises(ValueError, match="[Nn]o image"):
+            self.image.set_viewport(center=(10, 10), fov=100)
+
+        # The same is true for removing a catalog when none is loaded.
+        with pytest.raises(ValueError, match="[Nn]o catalog"):
+            self.image.remove_catalog()
 
     def test_get_image(self, data):
         self.image.load_image(data, image_label="test")
