@@ -32,7 +32,9 @@ class ImageViewerInterface(Protocol):
             or an `~astropy.nddata.NDData` object.
 
         image_label : optional
-            The label for the image.
+            The label for the image. If not given, a single shared default
+            label is used, so loading an image without a label repeatedly
+            replaces the previously loaded unlabeled image.
 
         **kwargs
             Additional keyword arguments that may be used by the viewer.
@@ -366,8 +368,9 @@ class ImageViewerInterface(Protocol):
             If `True`, the ``skycoord_colname`` column will be used to
             get the marker positions. Default is `False`.
         catalog_label : str, optional
-            The name of the marker set to use. If not given, a unique
-            name will be generated.
+            The name to use for the catalog. If not given, a single shared
+            default label is used, so loading a catalog without a label
+            repeatedly replaces the previously loaded unlabeled catalog.
         catalog_style : dict, optional
             A dictionary that specifies the style of the markers used to
             represent the catalog. See
@@ -379,9 +382,7 @@ class ImageViewerInterface(Protocol):
         Raises
         ------
         ValueError
-            If the ``table`` does not contain the required columns, or if
-            the ``catalog_label`` is not provided when there are multiple
-            catalogs loaded.
+            If the ``table`` does not contain the required columns.
 
         Notes
         -----
@@ -444,8 +445,8 @@ class ImageViewerInterface(Protocol):
             The name of the catalog. If not given and there is
             only one catalog loaded, the style for that catalog is returned.
             If there are multiple catalogs and no label is provided, an error
-            is raised. If the label does not correspond to a loaded
-            catalog, an empty dictionary is returned.
+            is raised. If no label is given and no catalogs are loaded, the
+            default style is returned.
 
         **kwargs
             Additional keyword arguments that may be used by the viewer.
@@ -459,8 +460,9 @@ class ImageViewerInterface(Protocol):
         ------
 
         ValueError
-            If there are multiple catalog styles set and the user has not
-            specified a ``catalog_label`` for which to get the style.
+            If there are multiple catalog labels defined and the user has
+            not specified a ``catalog_label`` for which to get the style, or
+            if the ``catalog_label`` does not correspond to a loaded catalog.
 
         Notes
         -----
@@ -529,14 +531,16 @@ class ImageViewerInterface(Protocol):
         Returns
         -------
         table : `astropy.table.Table`
-            The table containing the marker positions. If no markers match the
-            ``catalog_label`` parameter, an empty table is returned.
+            The table containing the marker positions. If no catalogs are
+            loaded and no ``catalog_label`` is given, an empty table is
+            returned.
 
         Raises
         ------
         ValueError
             If the ``catalog_label`` is not provided when there are multiple catalogs
-            loaded.
+            loaded, or if the ``catalog_label`` does not correspond to a loaded
+            catalog.
 
         Notes
         -----

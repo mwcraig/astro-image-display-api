@@ -1,6 +1,5 @@
 import numbers
 import os
-from collections import defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +24,14 @@ from numpy.typing import ArrayLike
 from .interface_definition import ImageViewerInterface
 
 __all__ = ["ImageViewerLogic"]
+
+#: Label used for an image or catalog that is loaded without an explicit
+#: label. There is only ever one unlabeled image and one unlabeled catalog,
+#: so loading without a label repeatedly replaces the previous unlabeled
+#: image or catalog rather than accumulating new entries. The value is
+#: deliberately unlikely to collide with a label a user would choose
+#: themselves.
+DEFAULT_LABEL = "_internal_default_label"
 
 
 @dataclass
@@ -82,47 +89,91 @@ class ImageViewerLogic:
         self._set_up_catalog_image_dicts()
 
     def _set_up_catalog_image_dicts(self):
-        # This is a dictionary of marker sets. The keys are the names of the
-        # marker sets, and the values are the tables containing the markers.
-        self._catalogs = defaultdict(CatalogInfo)
-        self._catalogs[None].data = None
-        self._catalogs[None].style = self._default_catalog_style.copy()
+        # Keys are the user-visible labels of the loaded catalogs and images.
+        # Entries are created only by the load_* methods, so reading state
+        # can never create an entry.
+        self._catalogs: dict[str, CatalogInfo] = {}
+        self._images: dict[str, ViewportInfo] = {}
 
-        self._images = defaultdict(ViewportInfo)
-        self._images[None].center = None
-        self._images[None].fov = None
-        self._images[None].wcs = None
+    def _resolve_label(
+        self,
+        label: str | None,
+        kind: str,
+        allow_new: bool = False,
+    ) -> str:
+        """
+        Resolve a user-provided image or catalog label.
 
-    def _user_catalog_labels(self) -> list[str]:
-        """
-        Get the user-defined catalog labels.
-        """
-        return [label for label in self._catalogs if label is not None]
+        Parameters
+        ----------
+        label : str or None
+            The label the user provided, or None if they did not provide one.
+        kind : str
+            Either ``"image"`` or ``"catalog"``; selects which registry the
+            label is resolved against and is used in error messages.
+        allow_new : bool, optional
+            If True the label is being resolved for a load operation, so an
+            explicit label need not already exist and a missing label
+            resolves to the single shared default label instead of raising.
 
-    def _resolve_catalog_label(self, catalog_label: str | None) -> str:
-        """
-        Figure out the catalog label if the user did not specify one. This
-        is needed so that the user gets what they expect in the simple case
-        where there is only one catalog loaded. In that case the user may
-        or may not have actually specified a catalog label.
-        """
-        user_keys = self._user_catalog_labels()
-        if catalog_label is None:
-            match len(user_keys):
-                case 0:
-                    # No user-defined catalog labels, so return the default label.
-                    catalog_label = None
-                case 1:
-                    # The user must have loaded a catalog, so return that instead of
-                    # the default label, which live in the key None.
-                    catalog_label = user_keys[0]
-                case _:
-                    raise ValueError(
-                        "Multiple catalog styles defined. Please specify a "
-                        "catalog_label to get the style."
-                    )
+        Returns
+        -------
+        str
+            The resolved label.
 
-        return catalog_label
+        Raises
+        ------
+        ValueError
+            If an explicit label does not correspond to loaded data, or, when
+            no label is given, if nothing is loaded or if several labels
+            exist so the choice is ambiguous. Never raised when ``allow_new``
+            is True.
+
+        Notes
+        -----
+        This is needed so that the user gets what they expect in the simple
+        case where there is only one image or catalog loaded. In that case
+        the user may or may not have actually specified a label.
+        """
+        registry, article = (
+            (self._images, "an image")
+            if kind == "image"
+            else (self._catalogs, "a catalog")
+        )
+
+        if label is not None:
+            if not allow_new and label not in registry:
+                raise ValueError(
+                    f"{kind.capitalize()} label '{label}' not found. "
+                    f"Please load {article} first."
+                )
+            return label
+
+        if allow_new:
+            # A load without an explicit label always targets the single
+            # shared default label, so repeated unlabeled loads replace the
+            # previous unlabeled image or catalog rather than piling up new
+            # ones.
+            return DEFAULT_LABEL
+
+        match len(registry):
+            case 0:
+                raise ValueError(f"No {kind} is loaded. Please load {article} first.")
+            case 1:
+                return list(registry)[0]
+            case _:
+                raise ValueError(
+                    f"Multiple {kind} labels defined. Please specify a "
+                    f"{kind}_label to select one."
+                )
+
+    def _resolve_catalog_label(
+        self, catalog_label: str | None, allow_new: bool = False
+    ) -> str:
+        """
+        Resolve a user-provided catalog label; see `_resolve_label`.
+        """
+        return self._resolve_label(catalog_label, "catalog", allow_new=allow_new)
 
     @property
     def _default_catalog_style(self) -> dict[str, Any]:
@@ -141,10 +192,6 @@ class ImageViewerLogic:
         **kwargs,  # noqa: ARG002
     ) -> BaseStretch:
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         return self._images[image_label].stretch
 
     def set_stretch(
@@ -159,10 +206,6 @@ class ImageViewerLogic:
                 "`astropy.visualization` Stretch object."
             )
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         self._images[image_label].stretch = value
 
     def get_cuts(
@@ -171,10 +214,6 @@ class ImageViewerLogic:
         **kwargs,  # noqa: ARG002
     ) -> tuple:
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         return self._images[image_label].cuts
 
     def set_cuts(
@@ -193,10 +232,6 @@ class ImageViewerLogic:
                 "of two values."
             )
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         self._images[image_label].cuts = cuts
 
     def set_colormap(
@@ -206,10 +241,6 @@ class ImageViewerLogic:
         **kwargs,  # noqa: ARG002
     ) -> None:
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         self._images[image_label].colormap = map_name
 
     def get_colormap(
@@ -218,10 +249,6 @@ class ImageViewerLogic:
         **kwargs,  # noqa: ARG002
     ) -> str:
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         return self._images[image_label].colormap
 
     # The methods, grouped loosely by purpose
@@ -231,6 +258,13 @@ class ImageViewerLogic:
         catalog_label=None,
         **kwargs,  # noqa: ARG002
     ) -> dict[str, Any]:
+        if catalog_label is None and not self._catalogs:
+            # Nothing is loaded, so report the default style that a new
+            # catalog would get.
+            style = self._default_catalog_style
+            style["catalog_label"] = None
+            return style
+
         catalog_label = self._resolve_catalog_label(catalog_label)
 
         style = self._catalogs[catalog_label].style.copy()
@@ -245,51 +279,23 @@ class ImageViewerLogic:
         size: float = 5,
         **kwargs,
     ) -> None:
-        catalog_label = self._resolve_catalog_label(catalog_label)
-
-        if self._catalogs[catalog_label].data is None:
+        if not self._catalogs:
             raise ValueError("Must load a catalog before setting a catalog style.")
+
+        catalog_label = self._resolve_catalog_label(catalog_label)
 
         self._catalogs[catalog_label].style = dict(
             shape=shape, color=color, size=size, **kwargs
         )
 
     # Methods for loading data
-    def _user_image_labels(self) -> list[str]:
+    def _resolve_image_label(
+        self, image_label: str | None, allow_new: bool = False
+    ) -> str:
         """
-        Get the list of user-defined image labels.
-
-        Returns
-        -------
-        list of str
-            The list of user-defined image labels.
+        Resolve a user-provided image label; see `_resolve_label`.
         """
-        return [label for label in self._images if label is not None]
-
-    def _resolve_image_label(self, image_label: str | None) -> str:
-        """
-        Figure out the image label if the user did not specify one. This
-        is needed so that the user gets what they expect in the simple case
-        where there is only one image loaded. In that case the user may
-        or may not have actually specified a image label.
-        """
-        user_keys = self._user_image_labels()
-        if image_label is None:
-            match len(user_keys):
-                case 0:
-                    # No user-defined image labels, so return the default label.
-                    image_label = None
-                case 1:
-                    # The user must have loaded a image, so return that instead of
-                    # the default label, which live in the key None.
-                    image_label = user_keys[0]
-                case _:
-                    raise ValueError(
-                        "Multiple image labels defined. Please specify a image_label "
-                        "to get the style."
-                    )
-
-        return image_label
+        return self._resolve_label(image_label, "image", allow_new=allow_new)
 
     def load_image(
         self,
@@ -297,11 +303,11 @@ class ImageViewerLogic:
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        image_label = self._resolve_image_label(image_label)
+        image_label = self._resolve_image_label(image_label, allow_new=True)
 
-        # Delete the current viewport if it exists
-        if image_label in self._images:
-            del self._images[image_label]
+        # Start from a fresh entry so that no state from a previous image
+        # with this label carries over.
+        self._images[image_label] = ViewportInfo()
 
         if isinstance(file, str | os.PathLike):
             if isinstance(file, str):
@@ -323,18 +329,16 @@ class ImageViewerLogic:
         self._wcs = self._images[image_label].wcs
 
     def get_image(
-        self, image_label: str | None = None, **kwargs  # noqa: ARG002
+        self,
+        image_label: str | None = None,
+        **kwargs,  # noqa: ARG002
     ) -> ArrayLike | NDData | CCDData:
         image_label = self._resolve_image_label(image_label)
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
         return self._images[image_label].data
 
     @property
     def image_labels(self) -> tuple[str, ...]:
-        return tuple(k for k in self._images.keys() if k is not None)
+        return tuple(self._images)
 
     def _determine_largest_dimension(self, shape: tuple[int, int]) -> int:
         """
@@ -519,7 +523,10 @@ class ImageViewerLogic:
             else:
                 to_add[skycoord_colname] = None
 
-        catalog_label = self._resolve_catalog_label(catalog_label)
+        catalog_label = self._resolve_catalog_label(catalog_label, allow_new=True)
+
+        if catalog_label not in self._catalogs:
+            self._catalogs[catalog_label] = CatalogInfo()
 
         # Set the new data
         self._catalogs[catalog_label].data = to_add
@@ -556,17 +563,16 @@ class ImageViewerLogic:
             )
         elif catalog_label == "*":
             # If the user wants to remove all catalogs, we reset the
-            # catalogs dictionary to an empty one.
-            self._catalogs = defaultdict(CatalogInfo)
+            # catalogs dictionary to an empty one, which is exactly the
+            # state a fresh viewer starts in.
+            self._catalogs = {}
             return
 
-        # Special cases are done, so we can resolve the catalog label
+        # Special cases are done, so we can resolve the catalog label.
+        # Resolution raises a ValueError if the label is not found.
         catalog_label = self._resolve_catalog_label(catalog_label)
 
-        try:
-            del self._catalogs[catalog_label]
-        except KeyError as err:
-            raise ValueError(f"Catalog label {catalog_label} not found.") from err
+        del self._catalogs[catalog_label]
 
     def get_catalog(
         self,
@@ -576,15 +582,20 @@ class ImageViewerLogic:
         catalog_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> Table:
-        # Dostring is copied from the interface definition, so it is not
+        # Docstring is copied from the interface definition, so it is not
         # duplicated here.
-        catalog_label = self._resolve_catalog_label(catalog_label)
-
-        result = (
-            self._catalogs[catalog_label].data
-            if catalog_label in self._catalogs
-            else Table(names=["x", "y", "coord"])
-        )
+        if catalog_label is None and not self._catalogs:
+            # Nothing is loaded; return an empty table with the expected
+            # columns rather than raising, so that "is there anything
+            # here?" queries are easy to write.
+            result = Table(names=["x", "y", "coord"])
+        else:
+            catalog_label = self._resolve_catalog_label(catalog_label)
+            # Copy before renaming: rename_columns is in-place, and the
+            # table stored here is the actual registry entry, not a copy.
+            # Renaming it directly would permanently rename the columns of
+            # the stored catalog as a side effect of merely reading it.
+            result = self._catalogs[catalog_label].data.copy()
 
         result.rename_columns(
             ["x", "y", "coord"], [x_colname, y_colname, skycoord_colname]
@@ -594,7 +605,7 @@ class ImageViewerLogic:
 
     @property
     def catalog_labels(self) -> tuple[str, ...]:
-        return tuple(self._user_catalog_labels())
+        return tuple(self._catalogs)
 
     # Methods that modify the view
     def set_viewport(
@@ -605,11 +616,6 @@ class ImageViewerLogic:
         **kwargs,  # noqa: ARG002
     ) -> None:
         image_label = self._resolve_image_label(image_label)
-
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
 
         # Get current center/fov, if any, so that the user may input only one of them
         # after the initial setup if they wish.
@@ -680,11 +686,6 @@ class ImageViewerLogic:
         if sky_or_pixel not in (None, "sky", "pixel"):
             raise ValueError("sky_or_pixel must be 'sky', 'pixel', or None.")
         image_label = self._resolve_image_label(image_label)
-
-        if image_label not in self._images:
-            raise ValueError(
-                f"Image label '{image_label}' not found. Please load an image first."
-            )
 
         viewport = self._images[image_label]
 
