@@ -1,6 +1,6 @@
 import numbers
 import os
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,7 +82,6 @@ class ImageViewerLogic:
     """
 
     # some internal variable for keeping track of viewer state
-    _wcs: WCS | None = None
     _center: tuple[numbers.Real, numbers.Real] = (0.0, 0.0)
 
     def __post_init__(self):
@@ -324,10 +323,6 @@ class ImageViewerLogic:
             # Assume it is a 2D array
             self._load_array(file, image_label)
 
-        # This may eventually get pulled, but for now is needed to keep markers
-        # working with the new image.
-        self._wcs = self._images[image_label].wcs
-
     def get_image(
         self,
         image_label: str | None = None,
@@ -474,6 +469,50 @@ class ImageViewerLogic:
         p.write_text("This is a dummy file. The viewer does not save anything.")
 
     # Marker-related methods
+    def _catalog_conversion_wcs(self, conversion_required: bool) -> WCS | None:
+        """
+        Return the WCS to use for catalog pixel↔sky coordinate conversion.
+
+        A catalog cannot yet be associated with a particular image, so the
+        WCS is chosen with the same defaulting rule used for labels when no
+        label is given: if exactly one image is loaded, that image's WCS is
+        used. With no image loaded there is no WCS. With several images
+        loaded the choice is ambiguous, so if a conversion is actually
+        required an error is raised; otherwise no WCS is used, i.e. the
+        optional enrichment of the catalog with the coordinates that are
+        not in the table is skipped rather than done with an arbitrary
+        image's WCS.
+
+        Parameters
+        ----------
+        conversion_required : bool
+            Whether a pixel↔sky conversion is required to satisfy the
+            ``load_catalog`` call, as opposed to being merely opportunistic.
+
+        Returns
+        -------
+        `astropy.wcs.WCS` or None
+            The WCS of the single loaded image, or None.
+
+        Raises
+        ------
+        ValueError
+            If a conversion is required and several images are loaded.
+        """
+        match len(self._images):
+            case 0:
+                return None
+            case 1:
+                return list(self._images.values())[0].wcs
+            case _:
+                if conversion_required:
+                    raise ValueError(
+                        "Multiple image labels defined. Cannot determine "
+                        "which image's WCS to use to convert catalog "
+                        "coordinates."
+                    )
+                return None
+
     def load_catalog(
         self,
         table: Table,
@@ -495,10 +534,18 @@ class ImageViewerLogic:
         except KeyError:
             xy = None
 
-        to_add = deepcopy(table)
+        # A conversion is required, not just opportunistic, when the pixel
+        # columns must be computed from the sky coordinates or when sky
+        # coordinates were requested but are not in the table.
+        wcs = self._catalog_conversion_wcs(
+            conversion_required=(xy is None and coords is not None)
+            or (coords is None and use_skycoord)
+        )
+
+        to_add = table.copy()
         if xy is None:
-            if self._wcs is not None and coords is not None:
-                x, y = self._wcs.world_to_pixel(coords)
+            if wcs is not None and coords is not None:
+                x, y = wcs.world_to_pixel(coords)
                 to_add[x_colname] = x
                 to_add[y_colname] = y
                 xy = (x, y)
@@ -512,16 +559,22 @@ class ImageViewerLogic:
             )
 
         if coords is None:
-            if use_skycoord and self._wcs is None:
+            if use_skycoord and wcs is None:
                 raise ValueError(
                     "Cannot use sky coordinates without a SkyCoord column or WCS."
                 )
-            elif xy is not None and self._wcs is not None:
+            elif xy is not None and wcs is not None:
                 # If we have xy coordinates, convert them to sky coordinates
-                coords = self._wcs.pixel_to_world(xy[0], xy[1])
+                coords = wcs.pixel_to_world(xy[0], xy[1])
                 to_add[skycoord_colname] = coords
             else:
                 to_add[skycoord_colname] = None
+
+        # Store the position columns under canonical internal names so that
+        # get_catalog can return them under any requested names.
+        to_add.rename_columns(
+            [x_colname, y_colname, skycoord_colname], ["x", "y", "coord"]
+        )
 
         catalog_label = self._resolve_catalog_label(catalog_label, allow_new=True)
 
@@ -588,15 +641,14 @@ class ImageViewerLogic:
             # Nothing is loaded; return an empty table with the expected
             # columns rather than raising, so that "is there anything
             # here?" queries are easy to write.
-            result = Table(names=["x", "y", "coord"])
-        else:
-            catalog_label = self._resolve_catalog_label(catalog_label)
-            # Copy before renaming: rename_columns is in-place, and the
-            # table stored here is the actual registry entry, not a copy.
-            # Renaming it directly would permanently rename the columns of
-            # the stored catalog as a side effect of merely reading it.
-            result = self._catalogs[catalog_label].data.copy()
+            return Table(names=[x_colname, y_colname, skycoord_colname])
 
+        catalog_label = self._resolve_catalog_label(catalog_label)
+
+        # Return a copy so that modifying the returned table cannot corrupt
+        # the stored catalog, renamed from the canonical internal column
+        # names to the requested ones.
+        result = self._catalogs[catalog_label].data.copy()
         result.rename_columns(
             ["x", "y", "coord"], [x_colname, y_colname, skycoord_colname]
         )
@@ -694,11 +746,11 @@ class ImageViewerLogic:
         # then the return should be in world coordinates, otherwise it should
         # be in pixel coordinates.
         if sky_or_pixel is None:
-            if self._wcs is not None:
-                # Somebody set this to sky coordinates, so return sky coordinates
+            if viewport.wcs is not None:
+                # The requested image has a WCS, so return sky coordinates
                 sky_or_pixel = "sky"
             else:
-                # Somebody set this to pixel coordinates, so return pixel coordinates
+                # The requested image has no WCS, so return pixel coordinates
                 sky_or_pixel = "pixel"
 
         center = None

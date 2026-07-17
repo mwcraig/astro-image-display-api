@@ -778,6 +778,78 @@ class ImageAPITest:
         coords = wcs.pixel_to_world(catalog["x"], catalog["y"])
         assert all(coords.separation(retrieved_catalog["coord"]) < 1e-9 * u.deg)
 
+    def test_get_catalog_empty_on_fresh_viewer(self):
+        # Regression test for #90: get_catalog on a viewer with no catalog
+        # loaded must return an empty table with the requested column
+        # names rather than raising.
+        self._assert_empty_catalog_table(self.image.get_catalog())
+
+        tab = self.image.get_catalog(
+            x_colname="px", y_colname="py", skycoord_colname="sky"
+        )
+        assert len(tab) == 0
+        assert sorted(tab.colnames) == sorted(["px", "py", "sky"])
+
+    def test_load_get_catalog_custom_column_names(self, catalog):
+        # Regression test for #90: a catalog loaded with non-default column
+        # names must be retrievable with those names...
+        renamed = catalog.copy()
+        renamed.rename_columns(["x", "y", "coord"], ["px", "py", "sky"])
+        self.image.load_catalog(
+            renamed,
+            x_colname="px",
+            y_colname="py",
+            skycoord_colname="sky",
+            catalog_label="cat",
+        )
+
+        tab = self.image.get_catalog(
+            x_colname="px", y_colname="py", skycoord_colname="sky", catalog_label="cat"
+        )
+        assert sorted(tab.colnames) == sorted(["px", "py", "sky"])
+        np.testing.assert_allclose(tab["px"], catalog["x"])
+        np.testing.assert_allclose(tab["py"], catalog["y"])
+
+        # ...and get_catalog must return whatever column names are asked for.
+        tab = self.image.get_catalog(catalog_label="cat")
+        assert sorted(tab.colnames) == sorted(["x", "y", "coord"])
+        np.testing.assert_allclose(tab["x"], catalog["x"])
+
+    def test_get_catalog_renames_columns(self, catalog):
+        # Regression test for #90: renaming the position columns to the
+        # requested names must actually happen instead of being a silent
+        # no-op that returns the default names.
+        self.image.load_catalog(catalog, catalog_label="cat")
+
+        tab = self.image.get_catalog(
+            x_colname="xcen",
+            y_colname="ycen",
+            skycoord_colname="sky",
+            catalog_label="cat",
+        )
+        assert "xcen" in tab.colnames
+        assert "ycen" in tab.colnames
+        assert "sky" in tab.colnames
+        assert "x" not in tab.colnames
+        assert "y" not in tab.colnames
+        assert "coord" not in tab.colnames
+        np.testing.assert_allclose(tab["xcen"], catalog["x"])
+        np.testing.assert_allclose(tab["ycen"], catalog["y"])
+
+    def test_get_catalog_returns_copy(self, catalog):
+        # Regression test for #90: the returned table must be a copy, so
+        # that modifying it cannot corrupt the stored catalog.
+        self.image.load_catalog(catalog, catalog_label="cat")
+
+        tab = self.image.get_catalog(catalog_label="cat")
+        original_value = tab["x"][0]
+        tab["x"][0] = -999.0
+        tab.remove_column("y")
+
+        again = self.image.get_catalog(catalog_label="cat")
+        assert again["x"][0] == original_value
+        assert "y" in again.colnames
+
     def test_catalog_info_preserved_after_load(self, catalog):
         # Make sure that any catalog columns in addition to the position data
         # is preserved after loading a catalog.
@@ -881,6 +953,86 @@ class ImageAPITest:
         np.testing.assert_allclose(
             result["coord"].dec.deg, mark_coord_table["coord"].dec.deg
         )
+
+    @staticmethod
+    def _make_tan_wcs(crval, crpix, scale=0.001):
+        wcs = WCS(naxis=2)
+        wcs.wcs.crpix = list(crpix)
+        wcs.wcs.cdelt = [-scale, scale]
+        wcs.wcs.crval = list(crval)
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+        return wcs
+
+    def test_catalog_conversion_uses_single_image_wcs(self, data):
+        # Regression test for #91: catalog pixel<->sky conversion must use
+        # the WCS of the one loaded image, and later image loads must not
+        # rewrite a previously loaded catalog's coordinates.
+        wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
+        wcs2 = self._make_tan_wcs(crval=(10.0, -45.0), crpix=(500.0, 500.0))
+
+        self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
+
+        coord = wcs1.pixel_to_world([10.0, 20.0], [30.0, 40.0])
+        self.image.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
+
+        # Loading a second image with a different WCS must not change the
+        # already-computed pixel positions of the catalog.
+        self.image.load_image(NDData(data=data, wcs=wcs2), image_label="b")
+
+        tab = self.image.get_catalog(catalog_label="cat")
+        np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
+        np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
+
+    def test_load_catalog_ambiguous_wcs_raises(self, data):
+        # Regression test for #91: with several images loaded there is no
+        # way to know which image's WCS to use to convert the catalog's
+        # sky coordinates to pixels, so loading must raise instead of
+        # silently using the last-loaded image's WCS.
+        wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
+        wcs2 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(500.0, 500.0))
+        self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
+        self.image.load_image(NDData(data=data, wcs=wcs2), image_label="b")
+
+        coord = SkyCoord([150.0], [30.0], unit="deg")
+        with pytest.raises(ValueError, match="Multiple image labels"):
+            self.image.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
+
+        # Requesting sky coordinates from a pixel-only catalog is just as
+        # ambiguous.
+        pixel_only = Table(dict(x=[1.0], y=[2.0]))
+        with pytest.raises(ValueError, match="Multiple image labels"):
+            self.image.load_catalog(pixel_only, use_skycoord=True, catalog_label="cat")
+
+    def test_load_catalog_pixel_only_with_multiple_images(self, data):
+        # Regression test for #91: a pixel-only catalog needs no WCS, so it
+        # must load even with several images present, but its sky
+        # coordinates must not be filled in using an arbitrary image's WCS.
+        wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
+        wcs2 = self._make_tan_wcs(crval=(10.0, -45.0), crpix=(500.0, 500.0))
+        self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
+        self.image.load_image(NDData(data=data, wcs=wcs2), image_label="b")
+
+        self.image.load_catalog(Table(dict(x=[1.0], y=[2.0])), catalog_label="cat")
+
+        tab = self.image.get_catalog(catalog_label="cat")
+        assert not isinstance(tab["coord"], SkyCoord)
+
+    @pytest.mark.parametrize("load_order", [("nowcs", "withwcs"), ("withwcs", "nowcs")])
+    def test_get_viewport_default_uses_requested_image_wcs(self, data, wcs, load_order):
+        # Regression test for #93: the sky-vs-pixel default in get_viewport
+        # must be decided from the WCS of the *requested* image, not from
+        # the WCS of whichever image was loaded last.
+        for label in load_order:
+            use_wcs = wcs if label == "withwcs" else None
+            self.image.load_image(NDData(data=data, wcs=use_wcs), image_label=label)
+
+        vport = self.image.get_viewport(image_label="nowcs")
+        assert isinstance(vport["center"], tuple)
+        assert isinstance(vport["fov"], numbers.Real)
+
+        vport = self.image.get_viewport(image_label="withwcs")
+        assert isinstance(vport["center"], SkyCoord)
+        assert isinstance(vport["fov"], u.Quantity)
 
     def test_stretch(self, data):
         self.image.load_image(data, image_label="test")
