@@ -447,9 +447,9 @@ class ImageViewerLogic:
         file : str, `os.PathLike`, array-like or `~astropy.nddata.NDData`
             The data to load.
         image_label : str, optional
-            The label for the image. If not given, a unique label will be
-            generated, so that loading an image can never silently replace
-            a previously loaded image.
+            The label for the image. If not given, a single shared default
+            label is used, so loading an image without a label repeatedly
+            replaces the previously loaded unlabeled image.
         **kwargs
             Additional keyword arguments that may be used by the viewer.
 

@@ -1429,16 +1429,16 @@ class ImageAPITest:
             ("batch_exit", None),
         ]
 
-    def test_load_image_hooks_get_generated_label(self, data):
-        # An unlabeled load must pass the generated label to the hooks,
-        # never None.
+    def test_load_image_hooks_get_default_label(self, data):
+        # An unlabeled load must pass the resolved default label to the
+        # hooks, never None.
         viewer, calls = self._make_recording_viewer()
         viewer.load_image(data)
 
-        generated_label = viewer.image_labels[0]
+        default_label = viewer.image_labels[0]
         hook_labels = {label for _, label in calls if label is not None}
-        assert hook_labels == {generated_label}
-        assert ("render_image", generated_label) in calls
+        assert hook_labels == {default_label}
+        assert ("render_image", default_label) in calls
 
     def test_apply_hooks_gated_on_displayed_image(self, data):
         # The _apply_* hooks must fire only for the displayed image; for
@@ -1490,11 +1490,11 @@ class ImageAPITest:
         viewer.remove_catalog(catalog_label="cat")
         assert calls == [("remove_catalog_marks", "cat")]
 
-        # An unlabeled load must pass the generated label to the hook.
+        # An unlabeled load must pass the resolved default label to the hook.
         calls.clear()
         viewer.load_catalog(catalog)
-        generated_label = viewer.catalog_labels[0]
-        assert ("draw_catalog", generated_label) in calls
+        default_label = viewer.catalog_labels[0]
+        assert ("draw_catalog", default_label) in calls
 
     def test_remove_catalog_star_expanded_before_hooks(self, catalog):
         # remove_catalog must expand "*" itself and call the
