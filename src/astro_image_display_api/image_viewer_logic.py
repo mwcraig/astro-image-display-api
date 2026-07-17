@@ -330,17 +330,17 @@ class ImageViewerLogic:
 
     def set_stretch(
         self,
-        value: BaseStretch,
+        stretch: BaseStretch,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        if not isinstance(value, BaseStretch):
+        if not isinstance(stretch, BaseStretch):
             raise TypeError(
-                f"Stretch option {value} is not valid. Must be an "
+                f"Stretch option {stretch} is not valid. Must be an "
                 "`astropy.visualization` Stretch object."
             )
         image_label = self._resolve_image_label(image_label)
-        self._images[image_label].stretch = value
+        self._images[image_label].stretch = stretch
         if image_label in self._displayed_image_labels:
             self._apply_stretch(image_label)
 
@@ -354,15 +354,13 @@ class ImageViewerLogic:
 
     def set_cuts(
         self,
-        value: tuple[numbers.Real, numbers.Real] | BaseInterval,
+        cuts: tuple[numbers.Real, numbers.Real] | BaseInterval,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        if isinstance(value, tuple) and len(value) == 2:
-            cuts = ManualInterval(value[0], value[1])
-        elif isinstance(value, BaseInterval):
-            cuts = value
-        else:
+        if isinstance(cuts, tuple) and len(cuts) == 2:
+            cuts = ManualInterval(cuts[0], cuts[1])
+        elif not isinstance(cuts, BaseInterval):
             raise TypeError(
                 "Cuts must be an Astropy.visualization Interval object or a tuple "
                 "of two values."
@@ -372,12 +370,70 @@ class ImageViewerLogic:
         if image_label in self._displayed_image_labels:
             self._apply_cuts(image_label)
 
+    @staticmethod
+    def _validate_colormap_name(map_name: str) -> None:
+        """
+        Check that ``map_name`` is a valid matplotlib colormap name.
+
+        Parameters
+        ----------
+        map_name : str
+            The name of the colormap to validate.
+
+        Raises
+        ------
+        ValueError
+            If ``map_name`` is not the name of a matplotlib colormap.
+
+        Notes
+        -----
+        matplotlib is not a dependency of this package; if it is not
+        installed the name is accepted without validation.
+        """
+        try:
+            from matplotlib import colormaps
+        except ImportError:  # pragma: no cover
+            return
+        if map_name not in colormaps:
+            raise ValueError(f"Colormap '{map_name}' is not a valid colormap name.")
+
     def set_colormap(
         self,
         map_name: str,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
+        """
+        Set the colormap for the image specified by image_label.
+
+        The colormap name is validated against the matplotlib colormap
+        registry (see
+        `~astro_image_display_api.interface_definition.ImageViewerInterface.set_colormap`
+        for the full contract); a name that is not a matplotlib colormap
+        raises a `ValueError`. If matplotlib is not installed the name is
+        stored without validation.
+
+        Parameters
+        ----------
+        map_name : str
+            The name of the colormap to set.
+        image_label : str, optional
+            The label of the image to set the colormap for. If not given and
+            there is only one image loaded, the colormap for that image is
+            set. If there are multiple images and no label is provided, an
+            error is raised.
+        **kwargs
+            Additional keyword arguments that may be used by the viewer.
+
+        Raises
+        ------
+        ValueError
+            If the ``map_name`` is not a valid colormap name, if the
+            ``image_label`` is not provided when there are multiple images
+            loaded, or if the ``image_label`` does not correspond to a
+            loaded image.
+        """
+        self._validate_colormap_name(map_name)
         image_label = self._resolve_image_label(image_label)
         self._images[image_label].colormap = map_name
         if image_label in self._displayed_image_labels:
@@ -387,7 +443,7 @@ class ImageViewerLogic:
         self,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
-    ) -> str:
+    ) -> str | None:
         image_label = self._resolve_image_label(image_label)
         return self._images[image_label].colormap
 
@@ -441,10 +497,37 @@ class ImageViewerLogic:
 
     def load_image(
         self,
-        file: str | os.PathLike | ArrayLike | NDData,
+        data: str | os.PathLike | ArrayLike | NDData,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
+        """
+        Load a FITS file, 2D array or `~astropy.nddata.NDData` object into
+        the viewer and display it.
+
+        Parameters
+        ----------
+        data : str, `os.PathLike`, array-like or `~astropy.nddata.NDData`
+            The data to load. A string or path is interpreted as the name
+            of a FITS file (or of an ASDF file when it ends in ``.asdf``).
+        image_label : str, optional
+            The label for the image. If not given, a single shared default
+            label is used, so loading an image without a label repeatedly
+            replaces the previously loaded unlabeled image.
+        **kwargs
+            Additional keyword arguments that may be used by the viewer.
+
+        Notes
+        -----
+        Loading an image sets an appropriate viewport for that image and
+        makes it the displayed image, replacing the image that was
+        displayed before.
+
+        Loading data under an ``image_label`` that already exists replaces
+        that label's data but keeps the cuts, stretch and colormap that
+        were set for the label; the viewport is reset to fit the new data.
+        An image loaded under a new label starts from the default settings.
+        """
         image_label = self._resolve_image_label(image_label, allow_new=True)
 
         # When data is loaded under an existing label, that label keeps the
@@ -466,20 +549,20 @@ class ImageViewerLogic:
             self._images[image_label] = ViewportInfo()
 
             try:
-                if isinstance(file, str | os.PathLike):
-                    if isinstance(file, str):
-                        is_asdf = file.endswith(".asdf")
+                if isinstance(data, str | os.PathLike):
+                    if isinstance(data, str):
+                        is_asdf = data.endswith(".asdf")
                     else:
-                        is_asdf = file.suffix == ".asdf"
+                        is_asdf = data.suffix == ".asdf"
                     if is_asdf:
-                        self._load_asdf(file, image_label)
+                        self._load_asdf(data, image_label)
                     else:
-                        self._load_fits(file, image_label)
-                elif isinstance(file, NDData):
-                    self._load_nddata(file, image_label)
+                        self._load_fits(data, image_label)
+                elif isinstance(data, NDData):
+                    self._load_nddata(data, image_label)
                 else:
                     # Assume it is a 2D array
-                    self._load_array(file, image_label)
+                    self._load_array(data, image_label)
             except Exception:
                 # The load failed, so the viewer is still displaying whatever
                 # it displayed before. Put back the previous entry for this

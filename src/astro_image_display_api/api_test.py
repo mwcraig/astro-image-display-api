@@ -51,6 +51,7 @@ class ImageAPITest:
         expected columns.
         """
         rng = np.random.default_rng(45328975)
+        # The image shape is (height, width), i.e. (y, x).
         x = rng.uniform(0, DEFAULT_IMAGE_SHAPE[1], size=10)
         y = rng.uniform(0, DEFAULT_IMAGE_SHAPE[0], size=10)
         coord = wcs.pixel_to_world(x, y)
@@ -83,6 +84,17 @@ class ImageAPITest:
         marks = self.image.catalog_labels
         return set(marks)
 
+    @staticmethod
+    def _image_data_as_array(image_data):
+        """
+        Extract a plain array from whatever ``get_image`` returned.
+
+        The API does not specify the return type of ``get_image``, so
+        accept anything with a ``data`` attribute (`~astropy.nddata.NDData`
+        and friends) or an array.
+        """
+        return np.asarray(getattr(image_data, "data", image_data))
+
     @pytest.mark.parametrize("load_type", ["fits", "nddata", "array"])
     def test_load(self, data, tmp_path, load_type):
         match load_type:
@@ -98,6 +110,12 @@ class ImageAPITest:
                 load_arg = data
 
         self.image.load_image(load_arg)
+
+        # The image must be registered under a (generated) label and its
+        # data must be retrievable.
+        assert len(self.image.image_labels) == 1
+        retrieved = self.image.get_image()
+        np.testing.assert_allclose(self._image_data_as_array(retrieved), data)
 
     def test_set_get_center_xy(self, data):
         self.image.load_image(data, image_label="test")
@@ -512,6 +530,13 @@ class ImageAPITest:
         assert vport2["center"].separation(vport["center"]) < 1e-5 * u.arcsec
         assert vport2["fov"].value == pytest.approx(vport["fov"].value)
         assert vport2["image_label"] == vport["image_label"]
+
+        # Complete the pixel -> sky -> pixel round trip: converting back to
+        # pixel coordinates must recover the original pixel values.
+        vport_pixel = self.image.get_viewport(image_label="test", sky_or_pixel="pixel")
+        assert vport_pixel["center"][0] == pytest.approx(10)
+        assert vport_pixel["center"][1] == pytest.approx(10)
+        assert vport_pixel["fov"] == pytest.approx(100)
 
     def test_set_catalog_style_before_catalog_data_raises_error(self):
         # Make sure that adding a catalog style before adding any catalog
@@ -1043,23 +1068,26 @@ class ImageAPITest:
         with pytest.raises(TypeError, match=r"Stretch.*not valid.*"):
             self.image.set_stretch("not a valid value")
 
-        # A bad value should leave the stretch unchanged
-        assert self.image.get_stretch() is original_stretch
+        # A bad value should leave the stretch unchanged. Compare by type
+        # rather than identity so that backends returning an equivalent
+        # object pass.
+        assert isinstance(self.image.get_stretch(), type(original_stretch))
 
         self.image.set_stretch(LogStretch())
         # A valid value should change the stretch
-        assert self.image.get_stretch() is not original_stretch
         assert isinstance(self.image.get_stretch(), LogStretch)
 
     def test_cuts(self, data):
+        # Load an image first: the interface only promises behavior of
+        # set_cuts for loaded images.
+        self.image.load_image(data)
+
         with pytest.raises(TypeError, match="[mM]ust be"):
             self.image.set_cuts("not a valid value")
 
         with pytest.raises(TypeError, match="[mM]ust be"):
             self.image.set_cuts((1, 10, 100))
 
-        # Setting using histogram requires data
-        self.image.load_image(data)
         self.image.set_cuts(AsymmetricPercentileInterval(0.1, 99.9))
         assert isinstance(self.image.get_cuts(), AsymmetricPercentileInterval)
 
@@ -1144,6 +1172,11 @@ class ImageAPITest:
         # Check that setting a colormap raises an error if the colormap
         # is not in the list of allowed colormaps.
         self.image.load_image(data, image_label="test")
+
+        # A colormap name the backend does not support must raise a
+        # ValueError.
+        with pytest.raises(ValueError, match="not a valid"):
+            self.image.set_colormap("this-is-not-a-colormap", image_label="test")
 
         # Check that getting a colormap for an image label that does not exist
         with pytest.raises(ValueError, match="[Ii]mage label.*not found"):
@@ -1249,14 +1282,21 @@ class ImageAPITest:
     def test_get_image(self, data):
         self.image.load_image(data, image_label="test")
 
-        # currently the type is not specified in the API
+        # The type of the return value is not specified in the API, but the
+        # data it holds must match what was loaded.
         assert self.image.get_image() is not None
-        assert self.image.get_image(image_label="test") is not None
+        np.testing.assert_allclose(
+            self._image_data_as_array(self.image.get_image(image_label="test")), data
+        )
 
         retrieved_image = self.image.get_image(image_label="test")
 
+        # The retrieved image must be re-loadable, and survive the round trip.
         self.image.load_image(retrieved_image, image_label="another test")
-        assert self.image.get_image(image_label="another test") is not None
+        np.testing.assert_allclose(
+            self._image_data_as_array(self.image.get_image(image_label="another test")),
+            data,
+        )
 
         with pytest.raises(ValueError, match="[Ii]mage label.*not found"):
             self.image.get_image(image_label="not a valid label")
@@ -1353,6 +1393,56 @@ class ImageAPITest:
         assert not failed_methods, (
             "The following methods failed when called with additional kwargs:\n\t"
             f"{'\n\t'.join(failed_methods)}"
+        )
+
+    def test_parameter_names_match_interface(self):
+        """
+        Check that every method has the parameter names, in the order, that
+        the interface defines.
+
+        The parameter names are part of the documented API -- users call
+        these methods by keyword -- and because every method also accepts
+        ``**kwargs``, a wrongly named implementation parameter does not
+        raise a ``TypeError`` but silently swallows the keyword argument.
+        That makes signature inspection, not calling, the only reliable
+        check.
+        """
+        import inspect
+
+        from astro_image_display_api import ImageViewerInterface
+
+        mismatches = []
+        for name in ImageViewerInterface.__protocol_attrs__:
+            interface_attr = getattr(ImageViewerInterface, name)
+            if not callable(interface_attr):
+                # Properties take no arguments, so there is nothing to check.
+                continue
+            implementation_attr = getattr(type(self.image), name)
+
+            def named_parameters(func):
+                return [
+                    parameter.name
+                    for parameter in inspect.signature(func).parameters.values()
+                    if parameter.kind
+                    not in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD)
+                    and parameter.name != "self"
+                ]
+
+            interface_names = named_parameters(interface_attr)
+            implementation_names = named_parameters(implementation_attr)
+
+            # The implementation must have the interface's parameters, with
+            # the same names, in the same order, before any extra parameters
+            # of its own.
+            if implementation_names[: len(interface_names)] != interface_names:
+                mismatches.append(
+                    f"{name}: interface has parameters {interface_names}, "
+                    f"implementation has {implementation_names}"
+                )
+
+        assert not mismatches, (
+            "The following methods have parameter names that do not match "
+            "the interface definition:\n\t" + "\n\t".join(mismatches)
         )
 
     def test_every_method_attribute_has_docstring(self):

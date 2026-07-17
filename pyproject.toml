@@ -35,6 +35,7 @@ docs = [
 ]
 test = [
     "black",
+    "matplotlib",
     "pre-commit",
     "pytest-astropy",
     "ruff",
