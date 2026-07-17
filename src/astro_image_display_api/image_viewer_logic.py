@@ -752,7 +752,10 @@ class ImageViewerLogic:
                 pixel_scale = proj_plane_pixel_scales(viewport.wcs)[
                     1 - viewport.largest_dimension
                 ]
-                fov = viewport.fov.value / pixel_scale
+                # proj_plane_pixel_scales returns degrees for a celestial WCS
+                # (wcslib normalizes CUNIT to degrees), so convert the fov to
+                # degrees rather than assuming it already is in degrees.
+                fov = viewport.fov.to_value(u.degree) / pixel_scale
             else:
                 fov = viewport.fov
 

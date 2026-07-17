@@ -138,12 +138,17 @@ class ImageAPITest:
             assert isinstance(vport["fov"], numbers.Real)
             assert vport["fov"] == pytest.approx(max(data.shape))
 
-    def test_fov_anisotropic_pixel_scale(self, data):
+    @pytest.mark.parametrize("shape", [(100, 150), (150, 100)])
+    def test_fov_anisotropic_pixel_scale(self, shape):
         # Regression test for #89: the index into proj_plane_pixel_scales
         # is ordered by WCS pixel axis (0 = x, 1 = y), not by numpy shape
         # index (0 = y, 1 = x). Use an anisotropic pixel scale and a
-        # rectangular image so that using the wrong axis gives the
-        # wrong answer.
+        # rectangular image so that using the wrong axis gives the wrong
+        # answer. Both a wide (nx > ny) and a tall (ny > nx) image are
+        # checked so that hardcoding either axis index fails the test.
+        rng = np.random.default_rng(1234)
+        data = rng.random(shape)
+
         wcs = WCS(naxis=2)
         wcs.wcs.crpix = [50, 50]
         # RA scale 0.0002 deg/pix, Dec scale 0.0001 deg/pix
@@ -151,23 +156,67 @@ class ImageAPITest:
         wcs.wcs.crval = [150.0, 30.0]
         wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
 
-        # data shape is (100, 150): largest dimension is x (150 pixels),
-        # whose pixel scale is 0.0002 deg/pix.
+        # The largest dimension sets the field of view; its pixel scale
+        # is the RA scale for a wide image and the Dec scale for a tall
+        # image.
+        largest = max(shape)
+        pixel_scale = 0.0002 if shape[1] >= shape[0] else 0.0001
+        expected_fov_deg = largest * pixel_scale
+
         self.image.load_image(NDData(data=data, wcs=wcs), image_label="aniso")
 
         # Initial FOV should be the size of the largest dimension in degrees.
         vport = self.image.get_viewport(image_label="aniso")
-        expected_fov_deg = data.shape[1] * 0.0002
         assert vport["fov"].to(u.degree).value == pytest.approx(expected_fov_deg)
 
         # sky -> pixel conversion in get_viewport should use the same axis.
         vport_pixel = self.image.get_viewport(image_label="aniso", sky_or_pixel="pixel")
-        assert vport_pixel["fov"] == pytest.approx(data.shape[1])
+        assert vport_pixel["fov"] == pytest.approx(largest)
 
         # pixel -> sky conversion in get_viewport should also use that axis.
-        self.image.set_viewport(fov=data.shape[1], image_label="aniso")
+        self.image.set_viewport(fov=largest, image_label="aniso")
         vport_sky = self.image.get_viewport(image_label="aniso", sky_or_pixel="sky")
         assert vport_sky["fov"].to(u.degree).value == pytest.approx(expected_fov_deg)
+
+    def test_fov_sky_to_pixel_honors_quantity_unit(self, data):
+        # Regression test: converting an angular fov to pixels must convert
+        # the Quantity to degrees first, not assume it is already in degrees.
+        wcs = WCS(naxis=2)
+        wcs.wcs.crpix = [50, 50]
+        wcs.wcs.cdelt = np.array([-0.0002, 0.0002])
+        wcs.wcs.crval = [150.0, 30.0]
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+
+        self.image.load_image(NDData(data=data, wcs=wcs), image_label="test")
+
+        # Whole image width (150 px * 0.0002 deg/px = 0.03 deg), in arcmin.
+        fov = (max(data.shape) * 0.0002 * u.degree).to(u.arcmin)
+        self.image.set_viewport(fov=fov, image_label="test")
+
+        vport = self.image.get_viewport(image_label="test", sky_or_pixel="pixel")
+        assert vport["fov"] == pytest.approx(max(data.shape))
+
+    def test_fov_wcs_with_arcsec_cunit(self, data):
+        # A WCS whose CDELT/CUNIT are given in arcsec must give the same
+        # results as the equivalent WCS in degrees. wcslib normalizes
+        # CUNIT to degrees, so pixel scales derived from the WCS are
+        # always in degrees.
+        wcs = WCS(naxis=2)
+        wcs.wcs.crpix = [50, 50]
+        # 0.72 arcsec/pix = 0.0002 deg/pix
+        wcs.wcs.cdelt = np.array([-0.72, 0.72])
+        wcs.wcs.cunit = ["arcsec", "arcsec"]
+        wcs.wcs.crval = [150.0, 30.0]
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+
+        self.image.load_image(NDData(data=data, wcs=wcs), image_label="test")
+
+        expected_fov_deg = max(data.shape) * 0.0002
+        vport = self.image.get_viewport(image_label="test", sky_or_pixel="sky")
+        assert vport["fov"].to(u.degree).value == pytest.approx(expected_fov_deg)
+
+        vport_pixel = self.image.get_viewport(image_label="test", sky_or_pixel="pixel")
+        assert vport_pixel["fov"] == pytest.approx(max(data.shape))
 
     @pytest.mark.parametrize("world", [True, False])
     def test_initial_center_is_image_center(self, data, wcs, world):
