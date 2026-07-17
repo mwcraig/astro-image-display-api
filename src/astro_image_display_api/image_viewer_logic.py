@@ -377,7 +377,9 @@ class ImageViewerLogic:
         # Deal with the viewport first
         height, width = image_data.shape
         # Center the image in the viewport and show the whole image.
-        center = (width / 2, height / 2)
+        # With 0-indexed pixel-center coordinates the center of the
+        # image is at ((width - 1) / 2, (height - 1) / 2).
+        center = ((width - 1) / 2, (height - 1) / 2)
         fov = max(image_data.shape)
         self._images[image_label].largest_dimension = self._determine_largest_dimension(
             image_data.shape
@@ -388,11 +390,14 @@ class ImageViewerLogic:
         # otherwise leave them as pixels.
         if wcs is not None:
             center = wcs.pixel_to_world(center[0], center[1])
+            # largest_dimension indexes the numpy shape tuple (0 = y, 1 = x),
+            # but proj_plane_pixel_scales is ordered by WCS pixel axis
+            # (0 = x, 1 = y), so flip the index.
             fov = (
                 fov
                 * u.degree
                 * proj_plane_pixel_scales(wcs)[
-                    self._images[image_label].largest_dimension
+                    1 - self._images[image_label].largest_dimension
                 ]
             )
 
@@ -685,8 +690,8 @@ class ImageViewerLogic:
 
         # Figure out what to return if the user did not specify sky_or_pixel.
         # The interface definition for get_viewport says that if the image has a WCS,
-        # then the return should be in world coordinates, otherwise it should be in pixel
-        # coordinates.
+        # then the return should be in world coordinates, otherwise it should
+        # be in pixel coordinates.
         if sky_or_pixel is None:
             if self._wcs is not None:
                 # Somebody set this to sky coordinates, so return sky coordinates
@@ -718,8 +723,12 @@ class ImageViewerLogic:
                             viewport.center[0], viewport.center[1]
                         )
                     if fov is None:
+                        # largest_dimension indexes the numpy shape tuple
+                        # (0 = y, 1 = x), but proj_plane_pixel_scales is
+                        # ordered by WCS pixel axis (0 = x, 1 = y), so flip
+                        # the index.
                         pixel_scale = proj_plane_pixel_scales(viewport.wcs)[
-                            viewport.largest_dimension
+                            1 - viewport.largest_dimension
                         ]
                         fov = pixel_scale * viewport.fov * u.degree
         else:
@@ -738,10 +747,15 @@ class ImageViewerLogic:
                     raise ValueError(
                         "WCS is not set. Cannot convert FOV to pixel coordinates."
                     )
+                # See comment above about flipping the index into
+                # proj_plane_pixel_scales.
                 pixel_scale = proj_plane_pixel_scales(viewport.wcs)[
-                    viewport.largest_dimension
+                    1 - viewport.largest_dimension
                 ]
-                fov = viewport.fov.value / pixel_scale
+                # proj_plane_pixel_scales returns degrees for a celestial WCS
+                # (wcslib normalizes CUNIT to degrees), so convert the fov to
+                # degrees rather than assuming it already is in degrees.
+                fov = viewport.fov.to_value(u.degree) / pixel_scale
             else:
                 fov = viewport.fov
 
