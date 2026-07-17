@@ -473,16 +473,6 @@ class ImageViewerLogic:
         """
         Return the WCS to use for catalog pixel↔sky coordinate conversion.
 
-        A catalog cannot yet be associated with a particular image, so the
-        WCS is chosen with the same defaulting rule used for labels when no
-        label is given: if exactly one image is loaded, that image's WCS is
-        used. With no image loaded there is no WCS. With several images
-        loaded the choice is ambiguous, so if a conversion is actually
-        required an error is raised; otherwise no WCS is used, i.e. the
-        optional enrichment of the catalog with the coordinates that are
-        not in the table is skipped rather than done with an arbitrary
-        image's WCS.
-
         Parameters
         ----------
         conversion_required : bool
@@ -498,6 +488,17 @@ class ImageViewerLogic:
         ------
         ValueError
             If a conversion is required and several images are loaded.
+
+        Notes
+        -----
+        The WCS is chosen with the same defaulting rule used for labels
+        when no label is given: if exactly one image is loaded, that
+        image's WCS is used. With no image loaded there is no WCS. With
+        several images loaded the choice is ambiguous, so if a conversion
+        is actually required an error is raised; otherwise no WCS is used,
+        i.e. the optional enrichment of the catalog with the coordinates
+        that are not in the table is skipped rather than done with an
+        arbitrary image's WCS.
         """
         match len(self._images):
             case 0:

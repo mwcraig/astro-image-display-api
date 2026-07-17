@@ -807,13 +807,13 @@ class ImageAPITest:
             x_colname="px", y_colname="py", skycoord_colname="sky", catalog_label="cat"
         )
         assert sorted(tab.colnames) == sorted(["px", "py", "sky"])
-        np.testing.assert_allclose(tab["px"], catalog["x"])
-        np.testing.assert_allclose(tab["py"], catalog["y"])
+        np.testing.assert_array_equal(tab["px"], catalog["x"])
+        np.testing.assert_array_equal(tab["py"], catalog["y"])
 
         # ...and get_catalog must return whatever column names are asked for.
         tab = self.image.get_catalog(catalog_label="cat")
         assert sorted(tab.colnames) == sorted(["x", "y", "coord"])
-        np.testing.assert_allclose(tab["x"], catalog["x"])
+        np.testing.assert_array_equal(tab["x"], catalog["x"])
 
     def test_get_catalog_renames_columns(self, catalog):
         # Regression test for #90: renaming the position columns to the
@@ -833,8 +833,8 @@ class ImageAPITest:
         assert "x" not in tab.colnames
         assert "y" not in tab.colnames
         assert "coord" not in tab.colnames
-        np.testing.assert_allclose(tab["xcen"], catalog["x"])
-        np.testing.assert_allclose(tab["ycen"], catalog["y"])
+        np.testing.assert_array_equal(tab["xcen"], catalog["x"])
+        np.testing.assert_array_equal(tab["ycen"], catalog["y"])
 
     def test_get_catalog_returns_copy(self, catalog):
         # Regression test for #90: the returned table must be a copy, so
