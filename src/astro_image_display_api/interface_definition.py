@@ -34,7 +34,9 @@ class ImageViewerInterface(Protocol):
         image_label : optional
             The label for the image. If not given, a single shared default
             label is used, so loading an image without a label repeatedly
-            replaces the previously loaded unlabeled image.
+            replaces the previously loaded unlabeled image. Loading an
+            image using an ``image_label`` that already exists will
+            replace the existing image with the new one.
 
         **kwargs
             Additional keyword arguments that may be used by the viewer.
@@ -54,10 +56,12 @@ class ImageViewerInterface(Protocol):
         **kwargs,
     ) -> Any:
         """
+        Get the data of a loaded image.
+
         Parameters
         ----------
         image_label : optional
-            The label of the image to set the cuts for. If not given and there is
+            The label of the image to get. If not given and there is
             only one image loaded, that image is returned.
 
         **kwargs
@@ -149,13 +153,13 @@ class ImageViewerInterface(Protocol):
             only one image loaded, the cuts for that image are returned. If there are
             multiple images and no label is provided, an error is raised.
 
+        **kwargs
+            Additional keyword arguments that may be used by the viewer.
+
         Returns
         -------
         cuts : `astropy.visualization.BaseInterval`
             The Astropy interval object representing the current cuts.
-
-        kwargs :
-            Additional keyword arguments that may be used by the viewer.
 
         Raises
         ------
@@ -214,9 +218,9 @@ class ImageViewerInterface(Protocol):
         Parameters
         ----------
         image_label : str, optional
-            The label of the image to get the cuts for. If not given and there is
-            only one image loaded, the cuts for that image are returned. If there are
-            multiple images and no label is provided, an error is raised.
+            The label of the image to get the stretch for. If not given and there
+            is only one image loaded, the stretch for that image is returned. If
+            there are multiple images and no label is provided, an error is raised.
 
         **kwargs
             Additional keyword arguments that may be used by the viewer.
@@ -225,6 +229,12 @@ class ImageViewerInterface(Protocol):
         -------
         stretch : `~astropy.visualization.BaseStretch`
             The Astropy stretch object representing the current stretch.
+
+        Raises
+        ------
+        ValueError
+            If the ``image_label`` is not provided when there are multiple images
+            loaded, or if the ``image_label`` does not correspond to a loaded image.
 
         Notes
         -----
@@ -243,9 +253,9 @@ class ImageViewerInterface(Protocol):
         ----------
         map_name
             The name of the colormap to set. This should be a
-            valid colormap name from `Matplotlib <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_;
-            not all backends will support
-            all colormaps, so the viewer should handle errors gracefully.
+            valid colormap name from `Matplotlib <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_.
+            Not all backends support all colormaps; a backend must raise
+            a `ValueError` for a colormap name it does not support.
         image_label : optional
             The label of the image to set the colormap for. If not given and there is
             only one image loaded, the colormap for that image is set. If there are
@@ -257,8 +267,10 @@ class ImageViewerInterface(Protocol):
         Raises
         ------
         ValueError
-            If the ``map_name`` is not a valid colormap name or if the ``image_label``
-            is not provided when there are multiple images loaded.
+            If the ``map_name`` is not a colormap name the backend supports,
+            if the ``image_label`` is not provided when there are multiple
+            images loaded, or if the ``image_label`` does not correspond to a
+            loaded image.
 
         Notes
         -----
@@ -269,7 +281,7 @@ class ImageViewerInterface(Protocol):
         raise NotImplementedError
 
     @abstractmethod
-    def get_colormap(self, image_label: str | None = None, **kwargs) -> str:
+    def get_colormap(self, image_label: str | None = None, **kwargs) -> str | None:
         """
         Get the current colormap for the image.
 
@@ -285,8 +297,11 @@ class ImageViewerInterface(Protocol):
 
         Returns
         -------
-        map_name : str
-            The name of the current colormap.
+        map_name : str or None
+            The name of the current colormap, or `None` if no colormap has
+            been set for the image. A return of `None` means the backend is
+            using whatever default colormap it chooses; a backend may instead
+            return the name of that default.
 
         Raises
         ------
@@ -361,12 +376,20 @@ class ImageViewerInterface(Protocol):
             The name of the column containing the y positions. Default
             is ``'y'``.
         skycoord_colname : str, optional
-            The name of the column containing the sky coordinates. If
-            given, the ``use_skycoord`` parameter is ignored. Default
-            is ``'coord'``.
+            The name of the column containing the sky coordinates, as
+            `~astropy.coordinates.SkyCoord` objects. The column is only
+            used for marker positions when ``use_skycoord`` is `True`.
+            Default is ``'coord'``.
         use_skycoord : bool, optional
-            If `True`, the ``skycoord_colname`` column will be used to
-            get the marker positions. Default is `False`.
+            Whether marker positions come from sky or pixel coordinates.
+            If `True`, positions are taken from the ``skycoord_colname``
+            column, or computed from the pixel position columns and the
+            image's WCS if the table has no sky-coordinate column. If
+            `False` (the default), positions are taken from the
+            ``x_colname``/``y_colname`` columns, or computed from the
+            sky-coordinate column and the image's WCS if the table has no
+            pixel position columns. An error is raised when the requested
+            mode is impossible with the available columns and WCS.
         catalog_label : str, optional
             The name to use for the catalog. If not given, a single shared
             default label is used, so loading a catalog without a label
@@ -382,7 +405,15 @@ class ImageViewerInterface(Protocol):
         Raises
         ------
         ValueError
-            If the ``table`` does not contain the required columns.
+            If pixel positions are requested (``use_skycoord=False``) but the
+            table has no pixel position columns and they cannot be computed
+            (error message starts with "Cannot use pixel coordinates without
+            pixel columns"), or if sky positions are requested
+            (``use_skycoord=True``) but the table has no sky-coordinate
+            column and there is no WCS to compute one (error message starts
+            with "Cannot use sky coordinates without"). Also raised if a
+            pixel/sky conversion is required but the choice of image WCS
+            is ambiguous because several images are loaded.
 
         Notes
         -----
@@ -405,6 +436,11 @@ class ImageViewerInterface(Protocol):
 
         Parameters
         ----------
+        catalog_label : str, optional
+            The label of the catalog whose style is being set. If not given
+            and there is only one catalog loaded, the style for that catalog
+            is set. If there are multiple catalogs and no label is provided,
+            an error is raised.
         shape : str, optional
             The shape of the markers. Default is ``'circle'``. The set of
             supported shapes is listed below in the *Note* section below.
@@ -454,7 +490,12 @@ class ImageViewerInterface(Protocol):
         Returns
         -------
         dict
-            The style of the markers.
+            The style of the markers. The dictionary always contains at
+            least the keys ``shape``, ``color`` and ``size``, and a
+            ``catalog_label`` key whose value is the label of the catalog
+            the style belongs to. When the default style is returned
+            because no catalogs are loaded, the value of the
+            ``catalog_label`` key is `None`.
 
         Raises
         ------
@@ -494,8 +535,8 @@ class ImageViewerInterface(Protocol):
             loaded catalog.
 
         TypeError
-            If the ``catalog_label`` is not a string or `None`, or if it is not
-            one of the allowed values.
+            If the ``catalog_label`` is a list. Only a single catalog label
+            or ``'*'`` may be given.
         """
         raise NotImplementedError
 
@@ -598,17 +639,22 @@ class ImageViewerInterface(Protocol):
         Raises
         ------
         TypeError
-            If the ``center`` is not a `~astropy.coordinates.SkyCoord` object or a tuple
-            of floats, or if the ``fov`` is not a angular `~astropy.units.Quantity` or a
-            float, or if there is no WCS and the center or field of view require a WCS
-            to be applied.
+            If the ``center`` is not a `~astropy.coordinates.SkyCoord` object
+            or a tuple of floats (error message starts with "Invalid value
+            for center"), or if the ``fov`` is not an angular
+            `~astropy.units.Quantity` or a float (error message starts with
+            "Invalid value for fov"). Also raised if the image has no WCS
+            and a sky value is given where the stored viewport is in pixels,
+            or vice versa, so that no conversion is possible; those error
+            messages start with "Center must be a tuple", "Center must be a
+            SkyCoord" or "FOV must be a float".
 
         ValueError
             If ``image_label`` is not provided when there are multiple images loaded.
 
         `astropy.units.UnitTypeError`
             If the ``fov`` is a `~astropy.units.Quantity` but does not have an angular
-            unit.
+            unit (error message starts with "Incorrect unit for fov").
 
         Notes
         -----
@@ -652,7 +698,8 @@ class ImageViewerInterface(Protocol):
             - 'center' is an `~astropy.coordinates.SkyCoord` object or a tuple of
             floats.
             - 'fov' is an `~astropy.units.Quantity` object or a float.
-            - 'image_label' is a string representing the label of the image.
+            - 'image_label' is a string representing the label of the image
+            (the default label if the image was loaded without one).
 
         Raises
         ------
@@ -660,6 +707,9 @@ class ImageViewerInterface(Protocol):
             If the ``sky_or_pixel`` parameter is not one of 'sky', 'pixel', or `None`,
             or if the ``image_label`` is not provided when there are multiple images
             loaded, or if the ``image_label`` does not correspond to a loaded image.
+            Also raised if a conversion between pixel and sky coordinates is
+            needed to satisfy the requested ``sky_or_pixel`` but the image
+            has no WCS; the error message contains "WCS is not set".
 
         Notes
         -----

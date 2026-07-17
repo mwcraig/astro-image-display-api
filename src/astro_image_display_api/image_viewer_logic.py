@@ -348,7 +348,7 @@ class ImageViewerLogic:
         self,
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
-    ) -> tuple:
+    ) -> BaseInterval:
         image_label = self._resolve_image_label(image_label)
         return self._images[image_label].cuts
 
