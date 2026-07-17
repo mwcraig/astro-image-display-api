@@ -160,7 +160,7 @@ class ImageViewerLogic:
             case 0:
                 raise ValueError(f"No {kind} is loaded. Please load {article} first.")
             case 1:
-                return next(iter(registry))
+                return list(registry)[0]
             case _:
                 raise ValueError(
                     f"Multiple {kind} labels defined. Please specify a "
