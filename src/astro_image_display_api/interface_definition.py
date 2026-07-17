@@ -32,9 +32,9 @@ class ImageViewerInterface(Protocol):
             or an `~astropy.nddata.NDData` object.
 
         image_label : optional
-            The label for the image. If not given, a unique label will be
-            generated, so that loading an image can never silently replace
-            a previously loaded image.
+            The label for the image. If not given, a single shared default
+            label is used, so loading an image without a label repeatedly
+            replaces the previously loaded unlabeled image.
 
         **kwargs
             Additional keyword arguments that may be used by the viewer.
@@ -368,9 +368,9 @@ class ImageViewerInterface(Protocol):
             If `True`, the ``skycoord_colname`` column will be used to
             get the marker positions. Default is `False`.
         catalog_label : str, optional
-            The name of the marker set to use. If not given, a unique
-            name will be generated, so that loading a catalog can never
-            silently replace a previously loaded catalog.
+            The name of the marker set to use. If not given, a single shared
+            default label is used, so loading a catalog without a label
+            repeatedly replaces the previously loaded unlabeled catalog.
         catalog_style : dict, optional
             A dictionary that specifies the style of the markers used to
             represent the catalog. See

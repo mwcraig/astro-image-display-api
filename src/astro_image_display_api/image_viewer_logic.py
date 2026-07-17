@@ -25,6 +25,12 @@ from .interface_definition import ImageViewerInterface
 
 __all__ = ["ImageViewerLogic"]
 
+#: Label used for an image or catalog that is loaded without an explicit
+#: label. There is only ever one unlabeled image and one unlabeled catalog,
+#: so loading without a label repeatedly replaces the previous unlabeled
+#: image or catalog rather than accumulating new entries.
+DEFAULT_LABEL = "default"
+
 
 @dataclass
 class CatalogInfo:
@@ -87,30 +93,6 @@ class ImageViewerLogic:
         self._catalogs: dict[str, CatalogInfo] = {}
         self._images: dict[str, ViewportInfo] = {}
 
-    @staticmethod
-    def _generate_label(registry: dict, kind: str) -> str:
-        """
-        Generate a unique label for a new image or catalog.
-
-        Parameters
-        ----------
-        registry : dict
-            The dictionary of already-loaded images or catalogs.
-        kind : str
-            Either ``"image"`` or ``"catalog"``; used as the prefix of the
-            generated label.
-
-        Returns
-        -------
-        str
-            A label of the form ``"<kind>-<number>"`` that is not already
-            a key of ``registry``.
-        """
-        index = len(registry) + 1
-        while (label := f"{kind}-{index}") in registry:
-            index += 1
-        return label
-
     def _resolve_label(
         self,
         label: str | None,
@@ -133,8 +115,8 @@ class ImageViewerLogic:
             label is resolved against and is used in error messages.
         allow_new : bool, optional
             If True the label is being resolved for a load operation, so an
-            explicit label need not already exist and a missing label leads
-            to a unique generated label instead of an error.
+            explicit label need not already exist and a missing label
+            resolves to the single shared default label instead of raising.
 
         Returns
         -------
@@ -164,7 +146,11 @@ class ImageViewerLogic:
             return label
 
         if allow_new:
-            return self._generate_label(registry, kind)
+            # A load without an explicit label always targets the single
+            # shared default label, so repeated unlabeled loads replace the
+            # previous unlabeled image or catalog rather than piling up new
+            # ones.
+            return DEFAULT_LABEL
 
         match len(registry):
             case 0:

@@ -337,7 +337,7 @@ class ImageAPITest:
 
         assert "fov" in vport
         assert "image_label" in vport
-        # A label was generated for the unlabeled load, and get_viewport
+        # The unlabeled load used the shared default label, and get_viewport
         # reports that label.
         assert vport["image_label"] == self.image.image_labels[0]
         if world:
@@ -364,7 +364,7 @@ class ImageAPITest:
         vport = self.image.get_viewport()
         assert vport["center"] == (10, 10)
         assert vport["fov"] == 100
-        # The unlabeled load was assigned a generated label.
+        # The unlabeled load used the shared default label.
         assert vport["image_label"] == self.image.image_labels[0]
 
     def test_set_get_viewport_single_label(self, data):
@@ -684,25 +684,28 @@ class ImageAPITest:
         with pytest.raises(ValueError, match="(?i)catalog label.*not found"):
             self.image.get_catalog(catalog_label="test1")
 
-    def test_unlabeled_catalog_loads_get_unique_labels(self, catalog):
-        # Regression test for #92: catalogs loaded without a label must get
-        # a generated unique label, so that no catalog is ever silently
-        # overwritten or unreachable.
+    def test_unlabeled_catalog_loads_share_one_default_label(self, catalog):
+        # There is only ever a single unlabeled ("default") catalog: loading a
+        # catalog without a label repeatedly replaces the previous unlabeled
+        # catalog rather than accumulating new ones.
         self.image.load_catalog(catalog)
         self.image.load_catalog(catalog)
 
         labels = self.image.catalog_labels
-        assert len(labels) == 2
-        assert len(set(labels)) == 2
+        assert len(labels) == 1
 
-        # Both catalogs must be reachable by their generated labels.
-        for label in labels:
-            retrieved = self.image.get_catalog(catalog_label=label)
-            assert len(retrieved) == len(catalog)
+        # The single default catalog is still reachable with no label.
+        retrieved = self.image.get_catalog()
+        assert len(retrieved) == len(catalog)
 
-        # An unlabeled load after a labeled one must not shadow anything.
+        # A labeled load coexists with the default one instead of replacing it.
         self.image.load_catalog(catalog, catalog_label="labeled")
-        assert len(self.image.catalog_labels) == 3
+        assert set(self.image.catalog_labels) == set(labels) | {"labeled"}
+        assert len(self.image.catalog_labels) == 2
+
+        # Another unlabeled load still replaces only the default catalog.
+        self.image.load_catalog(catalog)
+        assert len(self.image.catalog_labels) == 2
 
     def test_unknown_catalog_label_raises_and_does_not_pollute(self, catalog):
         # Regression tests for #113 (unknown explicit catalog labels must
@@ -1030,26 +1033,33 @@ class ImageAPITest:
         assert len(self.image.image_labels) == 1
         assert self.image.image_labels[-1] == "test"
 
-    def test_unlabeled_image_loads_get_unique_labels(self, data):
-        # Regression test for #92: images loaded without a label must get a
-        # generated unique label, appear in image_labels, and stay reachable.
+    def test_unlabeled_image_loads_share_one_default_label(self, data):
+        # There is only ever a single unlabeled ("default") image: loading an
+        # image without a label repeatedly replaces the previous unlabeled
+        # image rather than accumulating new ones.
         self.image.load_image(data)
         self.image.load_image(data * 2)
 
         labels = self.image.image_labels
-        assert len(labels) == 2
-        assert len(set(labels)) == 2
+        assert len(labels) == 1
 
-        # Both images must be reachable by their generated labels.
-        for label in labels:
-            assert self.image.get_image(image_label=label) is not None
+        # The single default image is still reachable with no label, and the
+        # most recent unlabeled load is the one that is kept.
+        np.testing.assert_allclose(self.image.get_image(), data * 2)
 
-        # A labeled load after an unlabeled one must not shadow the
-        # unlabeled image.
+        # A labeled load coexists with the default one instead of replacing it.
         self.image.load_image(data, image_label="labeled")
-        assert len(self.image.image_labels) == 3
-        for label in labels:
+        assert set(self.image.image_labels) == set(labels) | {"labeled"}
+        assert len(self.image.image_labels) == 2
+        for label in self.image.image_labels:
             assert self.image.get_image(image_label=label) is not None
+
+        # Another unlabeled load still replaces only the default image.
+        self.image.load_image(data * 3)
+        assert len(self.image.image_labels) == 2
+        np.testing.assert_allclose(
+            self.image.get_image(image_label="default"), data * 3
+        )
 
     def test_empty_viewer_image_operations_raise(self):
         # Regression test for #94: operations that need an image must raise
