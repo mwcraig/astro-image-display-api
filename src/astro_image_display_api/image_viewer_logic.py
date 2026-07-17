@@ -28,8 +28,10 @@ __all__ = ["ImageViewerLogic"]
 #: Label used for an image or catalog that is loaded without an explicit
 #: label. There is only ever one unlabeled image and one unlabeled catalog,
 #: so loading without a label repeatedly replaces the previous unlabeled
-#: image or catalog rather than accumulating new entries.
-DEFAULT_LABEL = "default"
+#: image or catalog rather than accumulating new entries. The value is
+#: deliberately unlikely to collide with a label a user would choose
+#: themselves.
+DEFAULT_LABEL = "_internal_default_label"
 
 
 @dataclass
@@ -102,10 +104,6 @@ class ImageViewerLogic:
         """
         Resolve a user-provided image or catalog label.
 
-        This is needed so that the user gets what they expect in the simple
-        case where there is only one image or catalog loaded. In that case
-        the user may or may not have actually specified a label.
-
         Parameters
         ----------
         label : str or None
@@ -130,6 +128,12 @@ class ImageViewerLogic:
             no label is given, if nothing is loaded or if several labels
             exist so the choice is ambiguous. Never raised when ``allow_new``
             is True.
+
+        Notes
+        -----
+        This is needed so that the user gets what they expect in the simple
+        case where there is only one image or catalog loaded. In that case
+        the user may or may not have actually specified a label.
         """
         registry, article = (
             (self._images, "an image")
@@ -587,7 +591,11 @@ class ImageViewerLogic:
             result = Table(names=["x", "y", "coord"])
         else:
             catalog_label = self._resolve_catalog_label(catalog_label)
-            result = self._catalogs[catalog_label].data
+            # Copy before renaming: rename_columns is in-place, and the
+            # table stored here is the actual registry entry, not a copy.
+            # Renaming it directly would permanently rename the columns of
+            # the stored catalog as a side effect of merely reading it.
+            result = self._catalogs[catalog_label].data.copy()
 
         result.rename_columns(
             ["x", "y", "coord"], [x_colname, y_colname, skycoord_colname]

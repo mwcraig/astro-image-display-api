@@ -1057,8 +1057,9 @@ class ImageAPITest:
         # Another unlabeled load still replaces only the default image.
         self.image.load_image(data * 3)
         assert len(self.image.image_labels) == 2
+        default_label = (set(self.image.image_labels) - {"labeled"}).pop()
         np.testing.assert_allclose(
-            self.image.get_image(image_label="default"), data * 3
+            self.image.get_image(image_label=default_label), data * 3
         )
 
     def test_empty_viewer_image_operations_raise(self):

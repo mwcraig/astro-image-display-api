@@ -368,7 +368,7 @@ class ImageViewerInterface(Protocol):
             If `True`, the ``skycoord_colname`` column will be used to
             get the marker positions. Default is `False`.
         catalog_label : str, optional
-            The name of the marker set to use. If not given, a single shared
+            The name to use for the catalog. If not given, a single shared
             default label is used, so loading a catalog without a label
             repeatedly replaces the previously loaded unlabeled catalog.
         catalog_style : dict, optional
@@ -460,9 +460,9 @@ class ImageViewerInterface(Protocol):
         ------
 
         ValueError
-            If there are multiple catalog styles set and the user has not
-            specified a ``catalog_label`` for which to get the style, or if
-            the ``catalog_label`` does not correspond to a loaded catalog.
+            If there are multiple catalog labels defined and the user has
+            not specified a ``catalog_label`` for which to get the style, or
+            if the ``catalog_label`` does not correspond to a loaded catalog.
 
         Notes
         -----
