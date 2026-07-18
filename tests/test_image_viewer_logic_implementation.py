@@ -1,12 +1,14 @@
-# Tests of the template-method rendering hooks in ImageViewerLogic: the
-# public API methods own all state handling and label resolution, then call
-# private no-op hooks (with already-resolved labels) that display backends
-# override to update their display.
+# Tests of ImageViewerLogic implementation behavior that is not part of
+# the API contract, so it lives here rather than in the ImageAPITest
+# compliance suite:
 #
-# The hook mechanism is an implementation detail of ImageViewerLogic, not
-# part of the API contract -- implementations of the API do not have to
-# adopt it -- so these tests live here rather than in the ImageAPITest
-# compliance suite.
+# - The template-method rendering hooks: the public API methods own all
+#   state handling and label resolution, then call private no-op hooks
+#   (with already-resolved labels) that display backends override to
+#   update their display. Implementations of the API do not have to
+#   adopt this mechanism.
+# - The carry-forward of the displayed image's cuts/stretch/colormap to
+#   a newly loaded image.
 
 from contextlib import contextmanager
 
