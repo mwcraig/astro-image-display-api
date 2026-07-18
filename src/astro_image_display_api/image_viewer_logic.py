@@ -668,23 +668,27 @@ class ImageViewerLogic:
         Returns
         -------
         `astropy.wcs.WCS` or None
-            The WCS of the single loaded image, or None.
+            The WCS of the single loaded or single displayed image, or
+            None.
 
         Raises
         ------
         ValueError
-            If a conversion is required and several images are loaded.
+            If a conversion is required, several images are loaded, and
+            the displayed image does not disambiguate the choice.
 
         Notes
         -----
         The WCS is chosen with the same defaulting rule used for labels
         when no label is given: if exactly one image is loaded, that
         image's WCS is used. With no image loaded there is no WCS. With
-        several images loaded the choice is ambiguous, so if a conversion
-        is actually required an error is raised; otherwise no WCS is used,
-        i.e. the optional enrichment of the catalog with the coordinates
-        that are not in the table is skipped rather than done with an
-        arbitrary image's WCS.
+        several images loaded, the image the viewer is currently
+        displaying disambiguates: if exactly one image is displayed, its
+        WCS is used. Otherwise the choice is ambiguous, so if a
+        conversion is actually required an error is raised; if not, no
+        WCS is used, i.e. the optional enrichment of the catalog with
+        the coordinates that are not in the table is skipped rather than
+        done with an arbitrary image's WCS.
         """
         match len(self._images):
             case 0:
@@ -692,6 +696,8 @@ class ImageViewerLogic:
             case 1:
                 return list(self._images.values())[0].wcs
             case _:
+                if len(self._displayed_image_labels) == 1:
+                    return self._images[self._displayed_image_labels[0]].wcs
                 if conversion_required:
                     raise ValueError(
                         "Multiple image labels defined. Cannot determine "

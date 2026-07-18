@@ -983,30 +983,30 @@ class ImageAPITest:
         np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
         np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
 
-    def test_load_catalog_ambiguous_wcs_raises(self, data):
-        # Regression test for #91: with several images loaded there is no
-        # way to know which image's WCS to use to convert the catalog's
-        # sky coordinates to pixels, so loading must raise instead of
-        # silently using the last-loaded image's WCS.
+    def test_load_catalog_uses_displayed_image_wcs(self, data):
+        # With several images loaded, the image the viewer is currently
+        # displaying decides which WCS converts the catalog's sky
+        # coordinates to pixels. After the second load, image "b" is the
+        # one being displayed, so its WCS -- not the first image's --
+        # must be used. (Follow-up to #91, which made this case raise
+        # before the displayed-image concept existed.)
         wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
         wcs2 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(500.0, 500.0))
         self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
         self.image.load_image(NDData(data=data, wcs=wcs2), image_label="b")
 
-        coord = SkyCoord([150.0], [30.0], unit="deg")
-        with pytest.raises(ValueError, match="Multiple image labels"):
-            self.image.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
+        coord = wcs2.pixel_to_world([10.0, 20.0], [30.0, 40.0])
+        self.image.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
 
-        # Requesting sky coordinates from a pixel-only catalog is just as
-        # ambiguous.
-        pixel_only = Table(dict(x=[1.0], y=[2.0]))
-        with pytest.raises(ValueError, match="Multiple image labels"):
-            self.image.load_catalog(pixel_only, use_skycoord=True, catalog_label="cat")
+        tab = self.image.get_catalog(catalog_label="cat")
+        np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
+        np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
 
     def test_load_catalog_pixel_only_with_multiple_images(self, data):
-        # Regression test for #91: a pixel-only catalog needs no WCS, so it
-        # must load even with several images present, but its sky
-        # coordinates must not be filled in using an arbitrary image's WCS.
+        # A pixel-only catalog needs no WCS, so it must load even with
+        # several images present; its sky coordinates are filled in with
+        # the WCS of the image being displayed, which after the second
+        # load is image "b".
         wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
         wcs2 = self._make_tan_wcs(crval=(10.0, -45.0), crpix=(500.0, 500.0))
         self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
@@ -1015,7 +1015,9 @@ class ImageAPITest:
         self.image.load_catalog(Table(dict(x=[1.0], y=[2.0])), catalog_label="cat")
 
         tab = self.image.get_catalog(catalog_label="cat")
-        assert not isinstance(tab["coord"], SkyCoord)
+        expected = wcs2.pixel_to_world([1.0], [2.0])
+        assert isinstance(tab["coord"], SkyCoord)
+        assert tab["coord"].separation(expected).max() < 1e-6 * u.deg
 
     @pytest.mark.parametrize("load_order", [("nowcs", "withwcs"), ("withwcs", "nowcs")])
     def test_get_viewport_default_uses_requested_image_wcs(self, data, wcs, load_order):
