@@ -51,8 +51,8 @@ class ImageAPITest:
         expected columns.
         """
         rng = np.random.default_rng(45328975)
-        x = rng.uniform(0, DEFAULT_IMAGE_SHAPE[0], size=10)
-        y = rng.uniform(0, DEFAULT_IMAGE_SHAPE[1], size=10)
+        x = rng.uniform(0, DEFAULT_IMAGE_SHAPE[1], size=10)
+        y = rng.uniform(0, DEFAULT_IMAGE_SHAPE[0], size=10)
         coord = wcs.pixel_to_world(x, y)
 
         cat = Table(

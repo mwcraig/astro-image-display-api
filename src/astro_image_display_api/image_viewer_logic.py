@@ -61,20 +61,27 @@ class ViewportInfo:
     data: ArrayLike | NDData | CCDData | None = None
 
 
+def _copy_missing_docs(cls, source):
+    """
+    Copy docstrings from ``source`` to the same-named public methods of
+    ``cls`` that lack a docstring of their own. Methods that already have
+    a docstring keep it.
+    """
+    for name, method in cls.__dict__.items():
+        if not name.startswith("_") and not method.__doc__:
+            source_method = getattr(source, name, None)
+            if source_method is not None:
+                method.__doc__ = source_method.__doc__
+    return cls
+
+
 def docs_from_interface(cls):
     """
     Decorator to copy the docstrings from the interface methods to the
     methods in the class. Methods that already have a docstring of their
     own keep it.
     """
-    for name, method in cls.__dict__.items():
-        if not name.startswith("_"):
-            if method.__doc__:
-                continue
-            interface_method = getattr(ImageViewerInterface, name, None)
-            if interface_method:
-                method.__doc__ = interface_method.__doc__
-    return cls
+    return _copy_missing_docs(cls, ImageViewerInterface)
 
 
 @dataclass
@@ -440,17 +447,12 @@ class ImageViewerLogic:
     ) -> None:
         image_label = self._resolve_image_label(image_label, allow_new=True)
 
-        # Carry forward the display settings of the displayed image that is
-        # being replaced, so that the new image appears with the same
-        # cuts/stretch/colormap the user was just looking at.
-        carried_cuts = carried_stretch = carried_colormap = None
-        for displayed_label in self._displayed_image_labels:
-            displayed = self._images.get(displayed_label)
-            if displayed is not None:
-                carried_cuts = displayed.cuts
-                carried_stretch = displayed.stretch
-                carried_colormap = displayed.colormap
-                break
+        # When data is loaded under an existing label, that label keeps the
+        # cuts/stretch/colormap the user attached to it; the data, WCS and
+        # viewport come from the new image. A new label starts from the
+        # default settings.
+        previous = self._images.get(image_label)
+        previous_displayed = self._displayed_image_labels
 
         with self._batch_update():
             # Nothing is displayed while the new image's state is being set
@@ -459,33 +461,44 @@ class ImageViewerLogic:
             # fixed order, at the end of this method.
             self._displayed_image_labels = ()
 
-            # Start from a fresh entry so that no state from a previous image
-            # with this label carries over.
+            # Start from a fresh entry; the settings an existing label keeps
+            # are restored after loading.
             self._images[image_label] = ViewportInfo()
 
-            if isinstance(file, str | os.PathLike):
-                if isinstance(file, str):
-                    is_asdf = file.endswith(".asdf")
+            try:
+                if isinstance(file, str | os.PathLike):
+                    if isinstance(file, str):
+                        is_asdf = file.endswith(".asdf")
+                    else:
+                        is_asdf = file.suffix == ".asdf"
+                    if is_asdf:
+                        self._load_asdf(file, image_label)
+                    else:
+                        self._load_fits(file, image_label)
+                elif isinstance(file, NDData):
+                    self._load_nddata(file, image_label)
                 else:
-                    is_asdf = file.suffix == ".asdf"
-                if is_asdf:
-                    self._load_asdf(file, image_label)
+                    # Assume it is a 2D array
+                    self._load_array(file, image_label)
+            except Exception:
+                # The load failed, so the viewer is still displaying whatever
+                # it displayed before. Put back the previous entry for this
+                # label (or remove the fresh one if the label was new) and
+                # the displayed-image tracking, so the _apply_* hooks keep
+                # firing for the image that is still on screen.
+                if previous is not None:
+                    self._images[image_label] = previous
                 else:
-                    self._load_fits(file, image_label)
-            elif isinstance(file, NDData):
-                self._load_nddata(file, image_label)
-            else:
-                # Assume it is a 2D array
-                self._load_array(file, image_label)
+                    del self._images[image_label]
+                self._displayed_image_labels = previous_displayed
+                raise
 
-            # Store the carried settings, overriding the defaults set while
-            # loading.
-            if carried_cuts is not None:
-                self._images[image_label].cuts = carried_cuts
-            if carried_stretch is not None:
-                self._images[image_label].stretch = carried_stretch
-            if carried_colormap is not None:
-                self._images[image_label].colormap = carried_colormap
+            # Restore the settings this label already had, overriding the
+            # defaults set while loading.
+            if previous is not None:
+                self._images[image_label].cuts = previous.cuts
+                self._images[image_label].stretch = previous.stretch
+                self._images[image_label].colormap = previous.colormap
 
             # The new image replaces whatever was displayed before.
             self._displayed_image_labels = (image_label,)
@@ -789,8 +802,9 @@ class ImageViewerLogic:
             # and never sees the "*" itself.
             removed_labels = tuple(self._catalogs)
             self._catalogs = {}
-            for removed_label in removed_labels:
-                self._remove_catalog_marks(removed_label)
+            with self._batch_update():
+                for removed_label in removed_labels:
+                    self._remove_catalog_marks(removed_label)
             return
 
         # Special cases are done, so we can resolve the catalog label.
@@ -1011,11 +1025,4 @@ def docs_from_super_if_missing(cls):
     type
         The same class, with missing docstrings filled in.
     """
-    for name, method in cls.__dict__.items():
-        if not name.startswith("_"):
-            if method.__doc__:
-                continue
-            interface_method = getattr(ImageViewerLogic, name, None)
-            if interface_method:
-                method.__doc__ = interface_method.__doc__
-    return cls
+    return _copy_missing_docs(cls, ImageViewerLogic)
