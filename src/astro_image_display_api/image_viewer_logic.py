@@ -1,3 +1,4 @@
+import contextlib
 import numbers
 import os
 from copy import copy
@@ -23,7 +24,7 @@ from numpy.typing import ArrayLike
 
 from .interface_definition import ImageViewerInterface
 
-__all__ = ["ImageViewerLogic"]
+__all__ = ["ImageViewerLogic", "docs_from_super_if_missing"]
 
 #: Label used for an image or catalog that is loaded without an explicit
 #: label. There is only ever one unlabeled image and one unlabeled catalog,
@@ -60,17 +61,27 @@ class ViewportInfo:
     data: ArrayLike | NDData | CCDData | None = None
 
 
+def _copy_missing_docs(cls, source):
+    """
+    Copy docstrings from ``source`` to the same-named public methods of
+    ``cls`` that lack a docstring of their own. Methods that already have
+    a docstring keep it.
+    """
+    for name, method in cls.__dict__.items():
+        if not name.startswith("_") and not method.__doc__:
+            source_method = getattr(source, name, None)
+            if source_method is not None:
+                method.__doc__ = source_method.__doc__
+    return cls
+
+
 def docs_from_interface(cls):
     """
     Decorator to copy the docstrings from the interface methods to the
-    methods in the class.
+    methods in the class. Methods that already have a docstring of their
+    own keep it.
     """
-    for name, method in cls.__dict__.items():
-        if not name.startswith("_"):
-            interface_method = getattr(ImageViewerInterface, name, None)
-            if interface_method:
-                method.__doc__ = interface_method.__doc__
-    return cls
+    return _copy_missing_docs(cls, ImageViewerInterface)
 
 
 @dataclass
@@ -86,6 +97,12 @@ class ImageViewerLogic:
 
     def __post_init__(self):
         self._set_up_catalog_image_dicts()
+        # Labels of the images the viewer is currently displaying. Today a
+        # viewer displays a single image at a time, so the tuple has at most
+        # one element and ``load_image`` uses replace semantics, but a tuple
+        # leaves room for multi-image display in the future. The ``_apply_*``
+        # hooks are only invoked for labels that are members of this tuple.
+        self._displayed_image_labels: tuple[str, ...] = ()
 
     def _set_up_catalog_image_dicts(self):
         # Keys are the user-visible labels of the loaded catalogs and images.
@@ -174,6 +191,124 @@ class ImageViewerLogic:
         """
         return self._resolve_label(catalog_label, "catalog", allow_new=allow_new)
 
+    # Rendering hooks for backends
+    #
+    # The public API methods of this class are templates: they own all state
+    # handling and label resolution, then call the hooks below so that a
+    # backend can push the already-validated state into its display. Every
+    # hook receives a *resolved* label (never None, never "*"). All hooks are
+    # no-ops here, which keeps this class a valid headless reference
+    # implementation of the interface.
+
+    def _render_image(self, image_label: str) -> None:
+        """
+        Display the image stored under ``image_label``.
+
+        Called by `load_image` after the image data, viewport, cuts, stretch
+        and colormap for the new image have all been stored and
+        ``image_label`` has become the displayed image.
+
+        Parameters
+        ----------
+        image_label : str
+            The resolved label of the image to display.
+        """
+
+    def _apply_cuts(self, image_label: str) -> None:
+        """
+        Push the stored cuts for ``image_label`` into the display.
+
+        Called by `set_cuts` and `load_image`, and only when ``image_label``
+        is one of the displayed images.
+
+        Parameters
+        ----------
+        image_label : str
+            The resolved label of the image whose cuts changed.
+        """
+
+    def _apply_stretch(self, image_label: str) -> None:
+        """
+        Push the stored stretch for ``image_label`` into the display.
+
+        Called by `set_stretch` and `load_image`, and only when
+        ``image_label`` is one of the displayed images.
+
+        Parameters
+        ----------
+        image_label : str
+            The resolved label of the image whose stretch changed.
+        """
+
+    def _apply_colormap(self, image_label: str) -> None:
+        """
+        Push the stored colormap for ``image_label`` into the display.
+
+        Called by `set_colormap` and `load_image`, and only when
+        ``image_label`` is one of the displayed images.
+
+        Parameters
+        ----------
+        image_label : str
+            The resolved label of the image whose colormap changed.
+        """
+
+    def _apply_viewport(self, image_label: str) -> None:
+        """
+        Push the stored viewport for ``image_label`` into the display.
+
+        Called by `set_viewport` and `load_image`, and only when
+        ``image_label`` is one of the displayed images.
+
+        Parameters
+        ----------
+        image_label : str
+            The resolved label of the image whose viewport changed.
+        """
+
+    def _draw_catalog(self, catalog_label: str) -> None:
+        """
+        Draw (or redraw) the markers for the catalog ``catalog_label``.
+
+        Called by `load_catalog` and `set_catalog_style` after the catalog
+        data and style have been stored.
+
+        Parameters
+        ----------
+        catalog_label : str
+            The resolved label of the catalog to draw.
+        """
+
+    def _remove_catalog_marks(self, catalog_label: str) -> None:
+        """
+        Remove the markers drawn for the catalog ``catalog_label``.
+
+        Called by `remove_catalog` after the catalog has been removed from
+        the stored state. `remove_catalog` expands ``"*"`` itself and calls
+        this hook once per removed catalog, so ``catalog_label`` is always
+        the label of a single catalog.
+
+        Parameters
+        ----------
+        catalog_label : str
+            The resolved label of the catalog whose markers to remove.
+        """
+
+    def _batch_update(self):
+        """
+        Context manager wrapping a group of display updates.
+
+        `load_image` wraps its state changes and hook calls in this context
+        manager. Backends can override it to suppress intermediate redraws
+        (e.g. by holding widget synchronization) until the batch completes.
+
+        Returns
+        -------
+        context manager
+            By default `contextlib.nullcontext`, i.e. no batching.
+        """
+        return contextlib.nullcontext()
+
     @property
     def _default_catalog_style(self) -> dict[str, Any]:
         """
@@ -206,6 +341,8 @@ class ImageViewerLogic:
             )
         image_label = self._resolve_image_label(image_label)
         self._images[image_label].stretch = value
+        if image_label in self._displayed_image_labels:
+            self._apply_stretch(image_label)
 
     def get_cuts(
         self,
@@ -232,6 +369,8 @@ class ImageViewerLogic:
             )
         image_label = self._resolve_image_label(image_label)
         self._images[image_label].cuts = cuts
+        if image_label in self._displayed_image_labels:
+            self._apply_cuts(image_label)
 
     def set_colormap(
         self,
@@ -241,6 +380,8 @@ class ImageViewerLogic:
     ) -> None:
         image_label = self._resolve_image_label(image_label)
         self._images[image_label].colormap = map_name
+        if image_label in self._displayed_image_labels:
+            self._apply_colormap(image_label)
 
     def get_colormap(
         self,
@@ -287,6 +428,8 @@ class ImageViewerLogic:
             shape=shape, color=color, size=size, **kwargs
         )
 
+        self._draw_catalog(catalog_label)
+
     # Methods for loading data
     def _resolve_image_label(
         self, image_label: str | None, allow_new: bool = False
@@ -304,24 +447,67 @@ class ImageViewerLogic:
     ) -> None:
         image_label = self._resolve_image_label(image_label, allow_new=True)
 
-        # Start from a fresh entry so that no state from a previous image
-        # with this label carries over.
-        self._images[image_label] = ViewportInfo()
+        # When data is loaded under an existing label, that label keeps the
+        # cuts/stretch/colormap the user attached to it; the data, WCS and
+        # viewport come from the new image. A new label starts from the
+        # default settings.
+        previous = self._images.get(image_label)
+        previous_displayed = self._displayed_image_labels
 
-        if isinstance(file, str | os.PathLike):
-            if isinstance(file, str):
-                is_asdf = file.endswith(".asdf")
-            else:
-                is_asdf = file.suffix == ".asdf"
-            if is_asdf:
-                self._load_asdf(file, image_label)
-            else:
-                self._load_fits(file, image_label)
-        elif isinstance(file, NDData):
-            self._load_nddata(file, image_label)
-        else:
-            # Assume it is a 2D array
-            self._load_array(file, image_label)
+        with self._batch_update():
+            # Nothing is displayed while the new image's state is being set
+            # up, so the set_* calls made during initialization below do not
+            # fire any of the _apply_* hooks; the hooks are called once, in a
+            # fixed order, at the end of this method.
+            self._displayed_image_labels = ()
+
+            # Start from a fresh entry; the settings an existing label keeps
+            # are restored after loading.
+            self._images[image_label] = ViewportInfo()
+
+            try:
+                if isinstance(file, str | os.PathLike):
+                    if isinstance(file, str):
+                        is_asdf = file.endswith(".asdf")
+                    else:
+                        is_asdf = file.suffix == ".asdf"
+                    if is_asdf:
+                        self._load_asdf(file, image_label)
+                    else:
+                        self._load_fits(file, image_label)
+                elif isinstance(file, NDData):
+                    self._load_nddata(file, image_label)
+                else:
+                    # Assume it is a 2D array
+                    self._load_array(file, image_label)
+            except Exception:
+                # The load failed, so the viewer is still displaying whatever
+                # it displayed before. Put back the previous entry for this
+                # label (or remove the fresh one if the label was new) and
+                # the displayed-image tracking, so the _apply_* hooks keep
+                # firing for the image that is still on screen.
+                if previous is not None:
+                    self._images[image_label] = previous
+                else:
+                    del self._images[image_label]
+                self._displayed_image_labels = previous_displayed
+                raise
+
+            # Restore the settings this label already had, overriding the
+            # defaults set while loading.
+            if previous is not None:
+                self._images[image_label].cuts = previous.cuts
+                self._images[image_label].stretch = previous.stretch
+                self._images[image_label].colormap = previous.colormap
+
+            # The new image replaces whatever was displayed before.
+            self._displayed_image_labels = (image_label,)
+
+            self._render_image(image_label)
+            self._apply_cuts(image_label)
+            self._apply_stretch(image_label)
+            self._apply_colormap(image_label)
+            self._apply_viewport(image_label)
 
     def get_image(
         self,
@@ -482,23 +668,27 @@ class ImageViewerLogic:
         Returns
         -------
         `astropy.wcs.WCS` or None
-            The WCS of the single loaded image, or None.
+            The WCS of the single loaded or single displayed image, or
+            None.
 
         Raises
         ------
         ValueError
-            If a conversion is required and several images are loaded.
+            If a conversion is required, several images are loaded, and
+            the displayed image does not disambiguate the choice.
 
         Notes
         -----
         The WCS is chosen with the same defaulting rule used for labels
         when no label is given: if exactly one image is loaded, that
         image's WCS is used. With no image loaded there is no WCS. With
-        several images loaded the choice is ambiguous, so if a conversion
-        is actually required an error is raised; otherwise no WCS is used,
-        i.e. the optional enrichment of the catalog with the coordinates
-        that are not in the table is skipped rather than done with an
-        arbitrary image's WCS.
+        several images loaded, the image the viewer is currently
+        displaying disambiguates: if exactly one image is displayed, its
+        WCS is used. Otherwise the choice is ambiguous, so if a
+        conversion is actually required an error is raised; if not, no
+        WCS is used, i.e. the optional enrichment of the catalog with
+        the coordinates that are not in the table is skipped rather than
+        done with an arbitrary image's WCS.
         """
         match len(self._images):
             case 0:
@@ -506,6 +696,8 @@ class ImageViewerLogic:
             case 1:
                 return list(self._images.values())[0].wcs
             case _:
+                if len(self._displayed_image_labels) == 1:
+                    return self._images[self._displayed_image_labels[0]].wcs
                 if conversion_required:
                     raise ValueError(
                         "Multiple image labels defined. Cannot determine "
@@ -596,20 +788,13 @@ class ImageViewerLogic:
 
         self._catalogs[catalog_label].style = catalog_style
 
+        self._draw_catalog(catalog_label)
+
     def remove_catalog(
         self,
         catalog_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        """
-        Remove markers from the image.
-
-        Parameters
-        ----------
-        marker_name : str, optional
-            The name of the marker set to remove. If the value is ``"*"``,
-            then all markers will be removed.
-        """
         if isinstance(catalog_label, list):
             raise TypeError(
                 "Cannot remove multiple catalogs from a list. Please specify "
@@ -618,8 +803,14 @@ class ImageViewerLogic:
         elif catalog_label == "*":
             # If the user wants to remove all catalogs, we reset the
             # catalogs dictionary to an empty one, which is exactly the
-            # state a fresh viewer starts in.
+            # state a fresh viewer starts in. The "*" is expanded here,
+            # so the _remove_catalog_marks hook is called once per catalog
+            # and never sees the "*" itself.
+            removed_labels = tuple(self._catalogs)
             self._catalogs = {}
+            with self._batch_update():
+                for removed_label in removed_labels:
+                    self._remove_catalog_marks(removed_label)
             return
 
         # Special cases are done, so we can resolve the catalog label.
@@ -627,6 +818,8 @@ class ImageViewerLogic:
         catalog_label = self._resolve_catalog_label(catalog_label)
 
         del self._catalogs[catalog_label]
+
+        self._remove_catalog_marks(catalog_label)
 
     def get_catalog(
         self,
@@ -729,6 +922,8 @@ class ImageViewerLogic:
         # 😅 if we made it this far we should be able to handle the actual setting
         self._images[image_label].center = center
         self._images[image_label].fov = fov
+        if image_label in self._displayed_image_labels:
+            self._apply_viewport(image_label)
 
     def get_viewport(
         self,
@@ -814,3 +1009,26 @@ class ImageViewerLogic:
                 fov = viewport.fov
 
         return dict(center=center, fov=fov, image_label=image_label)
+
+
+def docs_from_super_if_missing(cls):
+    """
+    Class decorator that fills in missing docstrings from the AIDA interface.
+
+    Public methods of the decorated class that lack a docstring receive the
+    docstring of the same-named method on
+    `~astro_image_display_api.image_viewer_logic.ImageViewerLogic`. Backends
+    that override interface methods can use this so that the overrides keep
+    the documented API without duplicating the docstrings.
+
+    Parameters
+    ----------
+    cls : type
+        The class being decorated.
+
+    Returns
+    -------
+    type
+        The same class, with missing docstrings filled in.
+    """
+    return _copy_missing_docs(cls, ImageViewerLogic)
