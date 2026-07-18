@@ -438,36 +438,6 @@ class ImageViewerLogic:
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        """
-        Load a FITS file, 2D array or `~astropy.nddata.NDData` object into
-        the viewer and display it.
-
-        Parameters
-        ----------
-        file : str, `os.PathLike`, array-like or `~astropy.nddata.NDData`
-            The data to load.
-        image_label : str, optional
-            The label for the image. If not given, a single shared default
-            label is used, so loading an image without a label repeatedly
-            replaces the previously loaded unlabeled image.
-        **kwargs
-            Additional keyword arguments that may be used by the viewer.
-
-        Notes
-        -----
-        Loading an image sets an appropriate viewport, cuts and stretch for
-        that image and makes it the displayed image, replacing the image
-        that was displayed before.
-
-        The cuts, stretch and colormap of the displayed image being replaced
-        carry forward: they are applied to the newly loaded image instead of
-        the defaults, so that, e.g., blinking through a sequence of images
-        keeps a consistent scaling. Settings of images that are loaded but
-        not displayed do not carry forward. The carried settings are stored
-        under the new image's label, so they can be changed afterwards with
-        `set_cuts`, `set_stretch` and `set_colormap` without affecting the
-        replaced image.
-        """
         image_label = self._resolve_image_label(image_label, allow_new=True)
 
         # Carry forward the display settings of the displayed image that is

@@ -7,5 +7,4 @@ try:
 except ImportError:
     __version__ = ""
 
-from .image_viewer_logic import *  # noqa: F403
 from .interface_definition import *  # noqa: F403
