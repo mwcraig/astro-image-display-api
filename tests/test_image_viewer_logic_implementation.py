@@ -11,17 +11,24 @@
 #   existing label keeps that label's cuts/stretch/colormap, a new label
 #   starts from the defaults.
 # - The restoration of the display tracking state when a load fails.
+# - The use of the displayed image's WCS to disambiguate catalog
+#   pixel/sky conversion when several images are loaded.
 
 from contextlib import contextmanager
 
 import numpy as np
 import pytest
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.io import fits
+from astropy.nddata import NDData
 from astropy.table import Table
 from astropy.visualization import (
     AsymmetricPercentileInterval,
     LinearStretch,
     LogStretch,
 )
+from astropy.wcs import WCS
 
 from astro_image_display_api.image_viewer_logic import ImageViewerLogic
 
@@ -264,3 +271,83 @@ def test_failed_load_image_keeps_existing_entry(data):
 
     assert np.array_equal(viewer.get_image(image_label="first"), data)
     assert viewer.get_colormap(image_label="first") == "viridis"
+
+
+def _make_tan_wcs(crval, crpix, scale=0.001):
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = list(crpix)
+    wcs.wcs.cdelt = [-scale, scale]
+    wcs.wcs.crval = list(crval)
+    wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    return wcs
+
+
+def test_load_catalog_uses_displayed_image_wcs(data):
+    # With several images loaded, ImageViewerLogic uses the WCS of the
+    # image it is currently displaying to convert the catalog's sky
+    # coordinates to pixels. After the second load, image "b" is the
+    # one being displayed, so its WCS -- not the first image's -- is
+    # used. This is reference-implementation behavior (the displayed
+    # image disambiguates the choice of WCS), not part of the API
+    # contract.
+    viewer = ImageViewerLogic()
+    wcs1 = _make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
+    wcs2 = _make_tan_wcs(crval=(150.0, 30.0), crpix=(500.0, 500.0))
+    viewer.load_image(NDData(data=data, wcs=wcs1), image_label="a")
+    viewer.load_image(NDData(data=data, wcs=wcs2), image_label="b")
+
+    coord = wcs2.pixel_to_world([10.0, 20.0], [30.0, 40.0])
+    viewer.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
+
+    tab = viewer.get_catalog(catalog_label="cat")
+    np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
+    np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
+
+
+def test_load_catalog_pixel_only_sky_from_displayed_image_wcs(data):
+    # A pixel-only catalog loaded while several images are present gets
+    # its sky-coordinate column filled in from the WCS of the image
+    # being displayed, which after the second load is image "b". As
+    # above, this is reference-implementation behavior, not contract:
+    # the compliance suite only requires that the pixel-only load
+    # succeed.
+    viewer = ImageViewerLogic()
+    wcs1 = _make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
+    wcs2 = _make_tan_wcs(crval=(10.0, -45.0), crpix=(500.0, 500.0))
+    viewer.load_image(NDData(data=data, wcs=wcs1), image_label="a")
+    viewer.load_image(NDData(data=data, wcs=wcs2), image_label="b")
+
+    viewer.load_catalog(Table(dict(x=[1.0], y=[2.0])), catalog_label="cat")
+
+    tab = viewer.get_catalog(catalog_label="cat")
+    expected = wcs2.pixel_to_world([1.0], [2.0])
+    assert isinstance(tab["coord"], SkyCoord)
+    assert tab["coord"].separation(expected).max() < 1e-6 * u.deg
+
+
+class _PlainPathLike:
+    """An os.PathLike that is not a pathlib.Path, so it has no .suffix."""
+
+    def __init__(self, path):
+        self._path = str(path)
+
+    def __fspath__(self):
+        return self._path
+
+
+def test_load_image_accepts_non_pathlib_pathlike(data, tmp_path):
+    # os.PathLike only guarantees __fspath__, so loading must not rely
+    # on pathlib.Path attributes like .suffix.
+    fits_path = tmp_path / "test.fits"
+    hdu = fits.PrimaryHDU(data=data)
+    hdu.header["BUNIT"] = "adu"
+    hdu.writeto(fits_path)
+
+    viewer = ImageViewerLogic()
+    viewer.load_image(_PlainPathLike(fits_path), image_label="fits")
+    assert np.array_equal(viewer.get_image(image_label="fits").data, data)
+
+    # The .asdf suffix must be detected on a bare os.PathLike too; the
+    # ASDF loader raising NotImplementedError proves the routing.
+    with pytest.raises(NotImplementedError):
+        viewer.load_image(_PlainPathLike("nope.asdf"), image_label="asdf")

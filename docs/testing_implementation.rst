@@ -7,7 +7,7 @@ Our goal is to make it easy for you to test your implementation of the
 Astronomical Image Display API (AIDA). There are two things you need to test:
 
 1. An instance of your class should pass the test
-   ``isinstance(your_instance, ImageDisplayInterface)``.
+   ``isinstance(your_instance, ImageViewerInterface)``.
    This ensures that your class has all of the attributes and methods in the interface.
 2. To test the functionality of your implementation, we provide the class
    :py:class:`~astro_image_display_api.api_test.ImageAPITest`.
