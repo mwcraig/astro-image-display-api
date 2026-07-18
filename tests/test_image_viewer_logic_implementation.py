@@ -16,6 +16,7 @@ from contextlib import contextmanager
 
 import numpy as np
 import pytest
+from astropy.io import fits
 from astropy.table import Table
 from astropy.visualization import (
     AsymmetricPercentileInterval,
@@ -264,3 +265,31 @@ def test_failed_load_image_keeps_existing_entry(data):
 
     assert np.array_equal(viewer.get_image(image_label="first"), data)
     assert viewer.get_colormap(image_label="first") == "viridis"
+
+
+class _PlainPathLike:
+    """An os.PathLike that is not a pathlib.Path, so it has no .suffix."""
+
+    def __init__(self, path):
+        self._path = str(path)
+
+    def __fspath__(self):
+        return self._path
+
+
+def test_load_image_accepts_non_pathlib_pathlike(data, tmp_path):
+    # os.PathLike only guarantees __fspath__, so loading must not rely
+    # on pathlib.Path attributes like .suffix.
+    fits_path = tmp_path / "test.fits"
+    hdu = fits.PrimaryHDU(data=data)
+    hdu.header["BUNIT"] = "adu"
+    hdu.writeto(fits_path)
+
+    viewer = ImageViewerLogic()
+    viewer.load_image(_PlainPathLike(fits_path), image_label="fits")
+    assert np.array_equal(viewer.get_image(image_label="fits").data, data)
+
+    # The .asdf suffix must be detected on a bare os.PathLike too; the
+    # ASDF loader raising NotImplementedError proves the routing.
+    with pytest.raises(NotImplementedError):
+        viewer.load_image(_PlainPathLike("nope.asdf"), image_label="asdf")

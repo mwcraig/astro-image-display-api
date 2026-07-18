@@ -403,36 +403,6 @@ class ImageViewerLogic:
         image_label: str | None = None,
         **kwargs,  # noqa: ARG002
     ) -> None:
-        """
-        Set the colormap for the image specified by image_label.
-
-        The colormap name is validated against the matplotlib colormap
-        registry (see
-        `~astro_image_display_api.interface_definition.ImageViewerInterface.set_colormap`
-        for the full contract); a name that is not a matplotlib colormap
-        raises a `ValueError`. If matplotlib is not installed the name is
-        stored without validation.
-
-        Parameters
-        ----------
-        map_name : str
-            The name of the colormap to set.
-        image_label : str, optional
-            The label of the image to set the colormap for. If not given and
-            there is only one image loaded, the colormap for that image is
-            set. If there are multiple images and no label is provided, an
-            error is raised.
-        **kwargs
-            Additional keyword arguments that may be used by the viewer.
-
-        Raises
-        ------
-        ValueError
-            If the ``map_name`` is not a valid colormap name, if the
-            ``image_label`` is not provided when there are multiple images
-            loaded, or if the ``image_label`` does not correspond to a
-            loaded image.
-        """
         self._validate_colormap_name(map_name)
         image_label = self._resolve_image_label(image_label)
         self._images[image_label].colormap = map_name
@@ -550,11 +520,9 @@ class ImageViewerLogic:
 
             try:
                 if isinstance(data, str | os.PathLike):
-                    if isinstance(data, str):
-                        is_asdf = data.endswith(".asdf")
-                    else:
-                        is_asdf = data.suffix == ".asdf"
-                    if is_asdf:
+                    # os.fsdecode normalizes str, bytes and any os.PathLike
+                    # (which need not be a pathlib.Path with a .suffix).
+                    if os.fsdecode(data).endswith(".asdf"):
                         self._load_asdf(data, image_label)
                     else:
                         self._load_fits(data, image_label)
