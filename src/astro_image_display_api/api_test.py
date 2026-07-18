@@ -89,9 +89,10 @@ class ImageAPITest:
         """
         Extract a plain array from whatever ``get_image`` returned.
 
-        The API does not specify the return type of ``get_image``, so
-        accept anything with a ``data`` attribute (`~astropy.nddata.NDData`
-        and friends) or an array.
+        The API requires ``get_image`` to return either something
+        array-like or an object exposing the array through a ``data``
+        attribute (`~astropy.nddata.NDData` and friends), so handle
+        both forms here.
         """
         return np.asarray(getattr(image_data, "data", image_data))
 
@@ -1008,30 +1009,12 @@ class ImageAPITest:
         np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
         np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
 
-    def test_load_catalog_uses_displayed_image_wcs(self, data):
-        # With several images loaded, the image the viewer is currently
-        # displaying decides which WCS converts the catalog's sky
-        # coordinates to pixels. After the second load, image "b" is the
-        # one being displayed, so its WCS -- not the first image's --
-        # must be used. (Follow-up to #91, which made this case raise
-        # before the displayed-image concept existed.)
-        wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
-        wcs2 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(500.0, 500.0))
-        self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
-        self.image.load_image(NDData(data=data, wcs=wcs2), image_label="b")
-
-        coord = wcs2.pixel_to_world([10.0, 20.0], [30.0, 40.0])
-        self.image.load_catalog(Table(dict(coord=coord)), catalog_label="cat")
-
-        tab = self.image.get_catalog(catalog_label="cat")
-        np.testing.assert_allclose(tab["x"], [10.0, 20.0], atol=1e-6)
-        np.testing.assert_allclose(tab["y"], [30.0, 40.0], atol=1e-6)
-
     def test_load_catalog_pixel_only_with_multiple_images(self, data):
-        # A pixel-only catalog needs no WCS, so it must load even with
-        # several images present; its sky coordinates are filled in with
-        # the WCS of the image being displayed, which after the second
-        # load is image "b".
+        # A pixel-only catalog needs no WCS, so it must load without error
+        # even with several images present, and get_catalog must return
+        # the pixel positions. Whether (and how) a sky-coordinate column
+        # is filled in from an image WCS in this situation is
+        # backend-dependent and not part of the contract.
         wcs1 = self._make_tan_wcs(crval=(150.0, 30.0), crpix=(50.0, 50.0))
         wcs2 = self._make_tan_wcs(crval=(10.0, -45.0), crpix=(500.0, 500.0))
         self.image.load_image(NDData(data=data, wcs=wcs1), image_label="a")
@@ -1040,9 +1023,8 @@ class ImageAPITest:
         self.image.load_catalog(Table(dict(x=[1.0], y=[2.0])), catalog_label="cat")
 
         tab = self.image.get_catalog(catalog_label="cat")
-        expected = wcs2.pixel_to_world([1.0], [2.0])
-        assert isinstance(tab["coord"], SkyCoord)
-        assert tab["coord"].separation(expected).max() < 1e-6 * u.deg
+        np.testing.assert_allclose(tab["x"], [1.0])
+        np.testing.assert_allclose(tab["y"], [2.0])
 
     @pytest.mark.parametrize("load_order", [("nowcs", "withwcs"), ("withwcs", "nowcs")])
     def test_get_viewport_default_uses_requested_image_wcs(self, data, wcs, load_order):

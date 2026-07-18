@@ -70,11 +70,12 @@ class ImageViewerInterface(Protocol):
         Returns
         -------
         image_data : Any
-            The data of the loaded image. The exact type of the data is not specified,
-            and different backends may return different types. A return type compatible
-            with `astropy.nddata.NDData` is preferred, but not required. It is expected
+            The data that was loaded for the image with the given label.
+            The returned object must either be array-like or expose the
+            array of image values through a ``data`` attribute, as
+            `~astropy.nddata.NDData` and its subclasses do. It is expected
             that the returned data can be re-loaded into the viewer using
-            `load_image`, however.
+            `load_image`.
 
         Raises
         ------
@@ -412,8 +413,9 @@ class ImageViewerInterface(Protocol):
             (``use_skycoord=True``) but the table has no sky-coordinate
             column and there is no WCS to compute one (error message starts
             with "Cannot use sky coordinates without"). Also raised if a
-            pixel/sky conversion is required but the choice of image WCS
-            is ambiguous because several images are loaded.
+            pixel/sky conversion is required but the backend cannot
+            determine which image's WCS to use (e.g. because several
+            images are loaded).
 
         Notes
         -----

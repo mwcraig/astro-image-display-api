@@ -24,7 +24,7 @@ from numpy.typing import ArrayLike
 
 from .interface_definition import ImageViewerInterface
 
-__all__ = ["ImageViewerLogic", "docs_from_image_logic_if_missing"]
+__all__ = ["ImageViewerLogic", "docs_from_image_viewer_logic_if_missing"]
 
 #: Label used for an image or catalog that is loaded without an explicit
 #: label. There is only ever one unlabeled image and one unlabeled catalog,
@@ -1062,7 +1062,7 @@ class ImageViewerLogic:
         return dict(center=center, fov=fov, image_label=image_label)
 
 
-def docs_from_image_logic_if_missing(cls):
+def docs_from_image_viewer_logic_if_missing(cls):
     """
     Class decorator that fills in missing docstrings from `ImageViewerLogic`.
 
