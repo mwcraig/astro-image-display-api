@@ -42,6 +42,9 @@ class RecordingViewer(ImageViewerLogic):
         # dictionaries first, then start our own call log.
         super().__post_init__()
         self.display_calls = []
+        # Updated by set_viewport() below; load_image() uses it to reread
+        # state without re-resolving a possibly ambiguous image_label.
+        self._last_viewport_image_label = None
 
     def _record(self, operation: str, **details: Any) -> None:
         """Append one (operation, details) entry to the display call log."""
@@ -63,26 +66,33 @@ class RecordingViewer(ImageViewerLogic):
         # raise "WCS is not set". Record the arguments we were given instead.
         super().set_viewport(center=center, fov=fov, image_label=image_label, **kwargs)
         self._record("set_viewport", center=center, fov=fov, image_label=image_label)
+        # load_image() always calls this (indirectly, via the base class)
+        # with the fully resolved label for the image being loaded, even
+        # when load_image() itself was given no image_label. Remember it so
+        # load_image() can reread the resolved state below without having to
+        # re-resolve a possibly-still-ambiguous, possibly-None image_label
+        # of its own.
+        self._last_viewport_image_label = image_label
 
     def set_cuts(
         self,
-        value: tuple[numbers.Real, numbers.Real] | BaseInterval,
+        cuts: tuple[numbers.Real, numbers.Real] | BaseInterval,
         image_label: str | None = None,
         **kwargs,
     ) -> None:
         """Set the cuts, then record the request."""
-        super().set_cuts(value, image_label=image_label, **kwargs)
-        self._record("set_cuts", value=value, image_label=image_label)
+        super().set_cuts(cuts, image_label=image_label, **kwargs)
+        self._record("set_cuts", cuts=cuts, image_label=image_label)
 
     def set_stretch(
         self,
-        value: BaseStretch,
+        stretch: BaseStretch,
         image_label: str | None = None,
         **kwargs,
     ) -> None:
         """Set the stretch, then record the request."""
-        super().set_stretch(value, image_label=image_label, **kwargs)
-        self._record("set_stretch", value=value, image_label=image_label)
+        super().set_stretch(stretch, image_label=image_label, **kwargs)
+        self._record("set_stretch", stretch=stretch, image_label=image_label)
 
     def set_colormap(
         self,
@@ -99,7 +109,7 @@ class RecordingViewer(ImageViewerLogic):
     # ------------------------------------------------------------------
     def load_image(
         self,
-        file: str | os.PathLike | ArrayLike | NDData,
+        data: str | os.PathLike | ArrayLike | NDData,
         image_label: str | None = None,
         **kwargs,
     ) -> None:
@@ -109,14 +119,16 @@ class RecordingViewer(ImageViewerLogic):
         # loading is done we read the *resolved* state back through the public
         # getters and push it as a single "load_image" entry, demonstrating the
         # "setters fire early, load pushes everything at the end" strategy.
-        super().load_image(file, image_label=image_label, **kwargs)
+        super().load_image(data, image_label=image_label, **kwargs)
 
-        # get_viewport() resolves the image label for us (its returned dict has
-        # the resolved "image_label"), so we can reuse that resolved label for
-        # the remaining getters. Force sky_or_pixel="pixel" so this never raises
-        # "WCS is not set" for an image that has no WCS.
-        viewport = self.get_viewport(image_label=image_label, sky_or_pixel="pixel")
-        resolved_label = viewport["image_label"]
+        # Reread the resolved state through the public getters. Re-resolving
+        # image_label ourselves here (e.g. by simply reusing it, or passing it
+        # to get_viewport()) would be ambiguous when it is None and several
+        # images are already loaded, even though the load itself was not
+        # ambiguous. set_viewport() above was called, as part of this same
+        # load, with the fully resolved label -- reuse that instead.
+        resolved_label = self._last_viewport_image_label
+        viewport = self.get_viewport(image_label=resolved_label, sky_or_pixel="pixel")
 
         self._record(
             "load_image",
